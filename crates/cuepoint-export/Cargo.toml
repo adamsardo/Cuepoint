@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 cuepoint-analysis = { path = "../cuepoint-analysis" }
 cuepoint-core = { path = "../cuepoint-core" }
+thiserror = "2"
 
 [dev-dependencies]
 # Independent reader used only in tests to check our files parse (MPL-2.0,
