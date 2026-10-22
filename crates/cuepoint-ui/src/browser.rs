@@ -14,6 +14,12 @@ pub enum Source {
     Playlist(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserAction {
+    /// Load `Library::tracks()[track]` to a deck; `None` lets the app pick.
+    Load { track: usize, deck: Option<usize> },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ViewKey {
     source: Source,
@@ -32,6 +38,8 @@ pub struct Browser {
     cached_key: Option<ViewKey>,
     /// Indices into `Library::tracks`, filtered and sorted.
     rows: Vec<usize>,
+    /// Highlighted track, as an index into `Library::tracks`.
+    selected: Option<usize>,
 }
 
 impl Default for Browser {
@@ -43,6 +51,7 @@ impl Default for Browser {
             generation: 0,
             cached_key: None,
             rows: Vec::new(),
+            selected: None,
         }
     }
 }
@@ -51,6 +60,7 @@ impl Browser {
     /// Call after replacing the library being shown.
     pub fn reset(&mut self) {
         self.source = Source::Collection;
+        self.selected = None;
         self.generation += 1;
     }
 
@@ -62,7 +72,9 @@ impl Browser {
         self.rows.len()
     }
 
-    pub fn show(&mut self, ui: &mut Ui, library: &Library) {
+    /// Draws the browser; returns what the user asked to do with a track.
+    pub fn show(&mut self, ui: &mut Ui, library: &Library) -> Option<BrowserAction> {
+        let mut action = None;
         egui::Panel::left("browser_tree")
             .resizable(true)
             .default_size(220.0)
@@ -82,8 +94,9 @@ impl Browser {
             });
             ui.separator();
             self.refresh(library);
-            self.table(ui, library);
+            action = self.table(ui, library);
         });
+        action
     }
 
     fn tree(&mut self, ui: &mut Ui, library: &Library) {
@@ -162,12 +175,16 @@ impl Browser {
         self.cached_key = Some(key);
     }
 
-    fn table(&mut self, ui: &mut Ui, library: &Library) {
+    fn table(&mut self, ui: &mut Ui, library: &Library) -> Option<BrowserAction> {
         let row_height = ui.text_style_height(&egui::TextStyle::Body) + 6.0;
         let mut clicked_column = None;
+        let mut action = None;
+        // Selectable text would swallow the row's clicks and double-clicks.
+        ui.style_mut().interaction.selectable_labels = false;
         TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
+            .sense(egui::Sense::click())
             .column(Column::auto().at_least(36.0))
             .column(Column::initial(240.0).at_least(80.0).clip(true))
             .column(Column::initial(160.0).at_least(60.0).clip(true))
@@ -201,7 +218,9 @@ impl Browser {
             .body(|body| {
                 body.rows(row_height, self.rows.len(), |mut row| {
                     let number = row.index() + 1;
-                    let track = &library.tracks()[self.rows[row.index()]];
+                    let track_index = self.rows[row.index()];
+                    let track = &library.tracks()[track_index];
+                    row.set_selected(self.selected == Some(track_index));
                     row.col(|ui| {
                         ui.weak(number.to_string());
                     });
@@ -250,6 +269,27 @@ impl Browser {
                     row.col(|ui| {
                         ui.label(&track.date_added);
                     });
+                    let response = row.response();
+                    if response.clicked() {
+                        self.selected = Some(track_index);
+                    }
+                    if response.double_clicked() {
+                        action = Some(BrowserAction::Load {
+                            track: track_index,
+                            deck: None,
+                        });
+                    }
+                    response.context_menu(|ui| {
+                        for deck in 0..2 {
+                            if ui.button(format!("Load to Deck {}", deck + 1)).clicked() {
+                                action = Some(BrowserAction::Load {
+                                    track: track_index,
+                                    deck: Some(deck),
+                                });
+                                ui.close();
+                            }
+                        }
+                    });
                 });
             });
         if let Some(column) = clicked_column {
@@ -260,5 +300,6 @@ impl Browser {
                 _ => Some((column, true)),
             };
         }
+        action
     }
 }
