@@ -21,9 +21,13 @@ const TRASH_CAPACITY: usize = 16;
 
 #[derive(Debug, Clone)]
 pub enum Command {
+    /// Refused while the deck plays. `serial` then appears in the deck's
+    /// `rejected_serial`, otherwise in its `load_serial`, so the UI learns
+    /// which happened.
     Load {
         deck: usize,
         pcm: Arc<Pcm>,
+        serial: u64,
     },
     Unload {
         deck: usize,
@@ -164,11 +168,13 @@ impl Engine {
 
     fn apply(&mut self, command: Command) {
         match command {
-            Command::Load { deck, pcm } => {
-                if let Some(d) = self.decks.get_mut(deck)
-                    && let Some(old) = d.load(pcm)
-                {
-                    self.discard(old);
+            Command::Load { deck, pcm, serial } => {
+                let Some(d) = self.decks.get_mut(deck) else {
+                    return self.discard(pcm);
+                };
+                match d.load(pcm, serial) {
+                    Ok(Some(old)) | Err(old) => self.discard(old),
+                    Ok(None) => {}
                 }
             }
             Command::Unload { deck } => {
@@ -264,6 +270,7 @@ mod tests {
         handle.send(Command::Load {
             deck: 0,
             pcm: tone(48_000, 0.5),
+            serial: 1,
         });
         handle.send(Command::PlayPause { deck: 0 });
         let mut out = vec![0.0; 2 * 4096];
@@ -283,11 +290,13 @@ mod tests {
         handle.send(Command::Load {
             deck: 1,
             pcm: first.clone(),
+            serial: 1,
         });
         engine.process(&mut [0.0; 64], 2);
         handle.send(Command::Load {
             deck: 1,
             pcm: tone(1000, 0.2),
+            serial: 1,
         });
         engine.process(&mut [0.0; 64], 2);
         assert_eq!(
@@ -312,10 +321,12 @@ mod tests {
             Command::Load {
                 deck: 0,
                 pcm: tone(96_000, 0.3),
+                serial: 1,
             },
             Command::Load {
                 deck: 1,
                 pcm: tone(96_000, 0.3),
+                serial: 1,
             },
             Command::PlayPause { deck: 0 },
             Command::PlayPause { deck: 1 },
@@ -338,6 +349,7 @@ mod tests {
             Command::Load {
                 deck: 0,
                 pcm: tone(96_000, 0.3),
+                serial: 1,
             },
             Command::CueDown { deck: 1 },
         ];
@@ -355,6 +367,7 @@ mod tests {
         handle.send(Command::Load {
             deck: 0,
             pcm: tone(48_000, 0.5),
+            serial: 1,
         });
         handle.send(Command::PlayPause { deck: 0 });
         let mut out = vec![1.0; 4 * 1024];

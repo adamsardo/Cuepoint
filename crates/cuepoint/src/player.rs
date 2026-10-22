@@ -24,6 +24,8 @@ pub struct Player {
     pub decks: [DeckView; DECKS],
     pub mixer: MixerView,
     load_ids: [u64; DECKS],
+    /// Decoded tracks sent to the engine, waiting for it to accept or refuse.
+    awaiting: [Option<(u64, LoadedTrack)>; DECKS],
     decoded_tx: Sender<Decoded>,
     decoded_rx: Receiver<Decoded>,
     commands: Vec<Command>,
@@ -39,6 +41,7 @@ impl Player {
             decks: std::array::from_fn(DeckView::new),
             mixer: MixerView::default(),
             load_ids: [0; DECKS],
+            awaiting: Default::default(),
             decoded_tx,
             decoded_rx,
             commands: Vec::new(),
@@ -106,31 +109,55 @@ impl Player {
         Ok(())
     }
 
-    /// Hands finished decodes to the engine. Call once per frame.
+    /// Hands finished decodes to the engine and applies its verdicts. Call
+    /// once per frame.
     pub fn poll_loads(&mut self) {
         while let Ok(decoded) = self.decoded_rx.try_recv() {
-            if decoded.id != self.load_ids[decoded.deck] {
+            let deck = decoded.deck;
+            if decoded.id != self.load_ids[deck] {
                 continue;
             }
-            let view = &mut self.decks[decoded.deck];
             match decoded.result {
                 Ok((pcm, overview)) => {
-                    view.message = None;
-                    view.loaded = Some(LoadedTrack {
-                        track: decoded.track,
-                        overview,
-                    });
-                    self.handle.send(Command::Load {
-                        deck: decoded.deck,
+                    let sent = self.handle.send(Command::Load {
+                        deck,
                         pcm,
+                        serial: decoded.id,
                     });
+                    if sent {
+                        let loaded = LoadedTrack {
+                            track: decoded.track,
+                            overview,
+                        };
+                        self.awaiting[deck] = Some((decoded.id, loaded));
+                    } else {
+                        self.decks[deck].message = Some("Audio engine is not responding.".into());
+                    }
                 }
                 Err(error) => {
-                    view.message = Some(format!(
+                    self.decks[deck].message = Some(format!(
                         "Could not load \"{}\": {error}",
                         decoded.track.title
                     ));
                 }
+            }
+        }
+        // The engine re-checks the playing-deck lock when it applies a load,
+        // since the deck may have started while the track was decoding.
+        let state = self.handle.state();
+        for (deck, slot) in self.awaiting.iter_mut().enumerate() {
+            let Some((serial, _)) = slot else { continue };
+            let deck_state = &state.decks[deck];
+            if deck_state.load_serial == *serial {
+                let (_, loaded) = slot.take().expect("checked above");
+                self.decks[deck].loaded = Some(loaded);
+                self.decks[deck].message = None;
+            } else if deck_state.rejected_serial == *serial {
+                *slot = None;
+                self.decks[deck].message = Some(format!(
+                    "Deck {} started playing, so the load was cancelled.",
+                    deck + 1
+                ));
             }
         }
     }

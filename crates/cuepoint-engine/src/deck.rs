@@ -31,6 +31,10 @@ pub struct DeckState {
     pub loop_in: Option<f64>,
     pub loop_out: Option<f64>,
     pub loop_active: bool,
+    /// Serial of the last load this deck accepted, 0 if none.
+    pub load_serial: u64,
+    /// Serial of the last load refused because the deck was playing.
+    pub rejected_serial: u64,
 }
 
 pub struct Deck {
@@ -49,6 +53,8 @@ pub struct Deck {
     pending_seek: Option<f64>,
     /// Position faded out during a cross-faded jump, and frames left.
     fade_from: Option<(f64, u32)>,
+    load_serial: u64,
+    rejected_serial: u64,
 }
 
 impl Default for Deck {
@@ -66,30 +72,39 @@ impl Default for Deck {
             gain: Ramp::new(0.0, DECLICK_FRAMES),
             pending_seek: None,
             fade_from: None,
+            load_serial: 0,
+            rejected_serial: 0,
         }
     }
 }
 
 impl Deck {
-    /// Loads a track, stopped at its start. Returns the previous track so the
-    /// caller can free it off the audio thread.
-    pub fn load(&mut self, pcm: Arc<Pcm>) -> Option<Arc<Pcm>> {
-        let tempo = self.tempo;
-        let old = self.pcm.replace(pcm);
-        let pcm = self.pcm.take();
-        *self = Self {
-            pcm,
-            tempo,
-            ..Self::default()
-        };
-        old
+    /// Loads a track, stopped at its start, unless the deck is playing
+    /// (rekordbox's default "lock playing deck"); then the track is handed
+    /// back as `Err`. On success returns the previous track. Either way the
+    /// caller frees the returned track off the audio thread.
+    pub fn load(&mut self, pcm: Arc<Pcm>, serial: u64) -> Result<Option<Arc<Pcm>>, Arc<Pcm>> {
+        if self.playing {
+            self.rejected_serial = serial;
+            return Err(pcm);
+        }
+        let old = self.reset(Some(pcm));
+        self.load_serial = serial;
+        Ok(old)
     }
 
     pub fn unload(&mut self) -> Option<Arc<Pcm>> {
-        let tempo = self.tempo;
+        self.reset(None)
+    }
+
+    /// Fresh state holding `pcm`, keeping tempo and load bookkeeping.
+    fn reset(&mut self, pcm: Option<Arc<Pcm>>) -> Option<Arc<Pcm>> {
         let old = self.pcm.take();
         *self = Self {
-            tempo,
+            pcm,
+            tempo: self.tempo,
+            load_serial: self.load_serial,
+            rejected_serial: self.rejected_serial,
             ..Self::default()
         };
         old
@@ -110,6 +125,8 @@ impl Deck {
             loop_in: self.loop_in,
             loop_out: self.loop_out,
             loop_active: self.loop_active,
+            load_serial: self.load_serial,
+            rejected_serial: self.rejected_serial,
         }
     }
 
@@ -264,7 +281,8 @@ impl Deck {
                 let wrapped = start + (self.position - stop);
                 self.jump(wrapped);
             }
-            if self.position >= end && self.playing {
+            // Start the stop fade while samples remain so the end never clicks.
+            if self.playing && self.position + f64::from(DECLICK_FRAMES) * self.tempo >= end {
                 self.previewing = false;
                 self.stop_at(end);
             }
@@ -295,7 +313,7 @@ mod tests {
     #[test]
     fn plays_at_tempo_and_pauses_in_place() {
         let mut deck = Deck::default();
-        deck.load(ramp_track(10_000));
+        deck.load(ramp_track(10_000), 1).unwrap();
         deck.play_pause();
         settle(&mut deck);
         let out = run(&mut deck, 4);
@@ -316,7 +334,7 @@ mod tests {
     #[test]
     fn cdj_cue_sets_previews_and_returns() {
         let mut deck = Deck::default();
-        deck.load(ramp_track(100_000));
+        deck.load(ramp_track(100_000), 1).unwrap();
         deck.seek(5_000.0);
         // Paused away from the cue: CUE stores the position.
         deck.cue_down();
@@ -346,7 +364,7 @@ mod tests {
     #[test]
     fn play_during_cue_preview_keeps_playing() {
         let mut deck = Deck::default();
-        deck.load(ramp_track(100_000));
+        deck.load(ramp_track(100_000), 1).unwrap();
         deck.cue_down();
         deck.play_pause();
         deck.cue_up();
@@ -357,7 +375,7 @@ mod tests {
     #[test]
     fn manual_loop_wraps_and_exits() {
         let mut deck = Deck::default();
-        deck.load(ramp_track(100_000));
+        deck.load(ramp_track(100_000), 1).unwrap();
         deck.play_pause();
         run(&mut deck, 1_000);
         deck.loop_in();
@@ -384,7 +402,7 @@ mod tests {
     #[test]
     fn stops_at_track_end() {
         let mut deck = Deck::default();
-        deck.load(ramp_track(1_000));
+        deck.load(ramp_track(1_000), 1).unwrap();
         deck.play_pause();
         run(&mut deck, 2_000);
         assert!(!deck.state().playing);
@@ -398,7 +416,11 @@ mod tests {
     fn jumps_and_stops_do_not_click() {
         // A constant signal: any discontinuity shows as a step.
         let mut deck = Deck::default();
-        deck.load(Arc::new(Pcm::from_interleaved(48_000, vec![0.5; 200_000])));
+        deck.load(
+            Arc::new(Pcm::from_interleaved(48_000, vec![0.5; 200_000])),
+            1,
+        )
+        .unwrap();
         deck.play_pause();
         let mut out = run(&mut deck, 1_000);
         deck.seek(50_000.0);
@@ -413,5 +435,40 @@ mod tests {
             max_step <= 0.5 / DECLICK_FRAMES as f32 + 1e-6,
             "step {max_step}"
         );
+    }
+
+    #[test]
+    fn track_end_fades_instead_of_clicking() {
+        let mut deck = Deck::default();
+        deck.load(Arc::new(Pcm::from_interleaved(48_000, vec![0.5; 2_000])), 1)
+            .unwrap();
+        deck.play_pause();
+        let out = run(&mut deck, 1_500);
+        let max_step = out
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f32::max);
+        assert!(
+            max_step <= 0.5 / DECLICK_FRAMES as f32 + 1e-6,
+            "step {max_step}"
+        );
+        assert!(!deck.state().playing);
+        assert_eq!(deck.state().position, 1_000.0);
+    }
+
+    #[test]
+    fn refuses_loads_while_playing() {
+        let mut deck = Deck::default();
+        deck.load(ramp_track(10_000), 1).unwrap();
+        deck.play_pause();
+        assert!(deck.load(ramp_track(10_000), 2).is_err());
+        let state = deck.state();
+        assert_eq!((state.load_serial, state.rejected_serial), (1, 2));
+        assert!(state.playing);
+
+        deck.play_pause();
+        settle(&mut deck);
+        assert!(deck.load(ramp_track(10_000), 3).unwrap().is_some());
+        assert_eq!(deck.state().load_serial, 3);
     }
 }

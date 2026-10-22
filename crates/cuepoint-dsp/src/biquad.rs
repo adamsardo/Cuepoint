@@ -2,6 +2,14 @@
 
 use std::f32::consts::PI;
 
+/// Angular frequency for `freq`, kept below Nyquist. A corner at or above
+/// half the sample rate (e.g. a 13 kHz shelf at 22.05 kHz) makes the
+/// filter unstable, so it is pulled down to just under Nyquist.
+fn omega(sample_rate: f32, freq: f32) -> f32 {
+    let freq = freq.clamp(1.0, sample_rate * 0.45);
+    2.0 * PI * freq / sample_rate
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BiquadCoeffs {
     b0: f32,
@@ -34,7 +42,7 @@ impl BiquadCoeffs {
     /// Shelf boosting or cutting everything below `freq`.
     pub fn low_shelf(sample_rate: f32, freq: f32, gain_db: f32) -> Self {
         let a = 10f32.powf(gain_db / 40.0);
-        let w0 = 2.0 * PI * freq / sample_rate;
+        let w0 = omega(sample_rate, freq);
         let (sin, cos) = w0.sin_cos();
         // Shelf slope S = 1.
         let alpha = sin / 2.0 * 2f32.sqrt();
@@ -52,7 +60,7 @@ impl BiquadCoeffs {
     /// Shelf boosting or cutting everything above `freq`.
     pub fn high_shelf(sample_rate: f32, freq: f32, gain_db: f32) -> Self {
         let a = 10f32.powf(gain_db / 40.0);
-        let w0 = 2.0 * PI * freq / sample_rate;
+        let w0 = omega(sample_rate, freq);
         let (sin, cos) = w0.sin_cos();
         let alpha = sin / 2.0 * 2f32.sqrt();
         let root = 2.0 * a.sqrt() * alpha;
@@ -69,7 +77,7 @@ impl BiquadCoeffs {
     /// Bell around `freq` with quality factor `q`.
     pub fn peaking(sample_rate: f32, freq: f32, q: f32, gain_db: f32) -> Self {
         let a = 10f32.powf(gain_db / 40.0);
-        let w0 = 2.0 * PI * freq / sample_rate;
+        let w0 = omega(sample_rate, freq);
         let (sin, cos) = w0.sin_cos();
         let alpha = sin / (2.0 * q);
         Self::normalised(
@@ -171,6 +179,27 @@ mod tests {
             for i in 0..1000 {
                 let x = (i as f32 * 0.37).sin();
                 assert!((f.process(x) - x).abs() < 1e-4);
+            }
+        }
+    }
+
+    #[test]
+    fn stays_stable_when_corner_exceeds_nyquist() {
+        for rate in [16_000.0, 22_050.0] {
+            for coeffs in [
+                BiquadCoeffs::high_shelf(rate, 13_000.0, -6.0),
+                BiquadCoeffs::high_shelf(rate, 13_000.0, 6.0),
+                BiquadCoeffs::peaking(rate, 13_000.0, 0.7, -26.0),
+            ] {
+                let mut filter = Biquad::new(coeffs);
+                let mut peak = filter.process(1.0).abs();
+                for _ in 0..100_000 {
+                    peak = peak.max(filter.process(0.0).abs());
+                }
+                assert!(
+                    peak.is_finite() && peak < 4.0,
+                    "unstable at {rate} Hz: {peak}"
+                );
             }
         }
     }
