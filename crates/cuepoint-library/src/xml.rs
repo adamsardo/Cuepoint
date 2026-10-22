@@ -56,13 +56,29 @@ pub fn parse(text: &str) -> Result<Library> {
     let mut in_collection = false;
     let mut in_playlists = false;
     let mut node_count = 0usize;
+    // quick-xml reports EOF without checking that every element closed, so
+    // track nesting to reject truncated files instead of loading part of them.
+    let mut depth = 0usize;
+    let mut saw_root = false;
 
     loop {
         let event = reader.read_event().map_err(|e| Error::Xml(e.to_string()))?;
+        if let Event::Start(e) | Event::Empty(e) = &event
+            && depth == 0
+        {
+            if saw_root || e.name().as_ref() != "DJ_PLAYLISTS" {
+                return Err(Error::Xml("root element is not DJ_PLAYLISTS".into()));
+            }
+            saw_root = true;
+        }
         let (element, is_empty) = match &event {
-            Event::Start(e) => (e, false),
+            Event::Start(e) => {
+                depth += 1;
+                (e, false)
+            }
             Event::Empty(e) => (e, true),
             Event::End(e) => {
+                depth -= 1;
                 match e.name().as_ref() {
                     "COLLECTION" => in_collection = false,
                     "PLAYLISTS" => in_playlists = false,
@@ -71,7 +87,12 @@ pub fn parse(text: &str) -> Result<Library> {
                 }
                 continue;
             }
-            Event::Eof => break,
+            Event::Eof if saw_root && depth == 0 => break,
+            Event::Eof => {
+                return Err(Error::Xml(
+                    "file ends before the document is complete (truncated export?)".into(),
+                ));
+            }
             _ => continue,
         };
         let attrs = Attrs::read(element)?;
@@ -324,6 +345,21 @@ mod tests {
         assert_eq!(by_location.tracks, [TrackId("13".into())]);
         assert!(gigs.children[1].tracks.is_empty());
         assert!(library.find_playlist(&by_location.id).is_some());
+    }
+
+    #[test]
+    fn rejects_truncated_or_foreign_documents() {
+        // Cut inside the playlist tree, then between collection tracks.
+        for cut in ["<TRACK Key=\"11\"/>", "<TRACK TrackID=\"12\""] {
+            let end = SAMPLE.find(cut).unwrap() + cut.len();
+            let truncated = SAMPLE[..end].rsplit_once('\n').unwrap().0;
+            assert!(
+                matches!(parse(truncated), Err(Error::Xml(_))),
+                "accepted cut at {cut}"
+            );
+        }
+        assert!(matches!(parse(""), Err(Error::Xml(_))));
+        assert!(matches!(parse("<playlist/>"), Err(Error::Xml(_))));
     }
 
     #[test]
