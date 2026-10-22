@@ -10,6 +10,7 @@ publish = false
 cuepoint-analysis = { path = "../cuepoint-analysis" }
 cuepoint-core = { path = "../cuepoint-core" }
 cuepoint-engine = { path = "../cuepoint-engine" }
+cuepoint-export = { path = "../cuepoint-export" }
 cuepoint-library = { path = "../cuepoint-library" }
 cuepoint-ui = { path = "../cuepoint-ui" }
 eframe = "0.37"

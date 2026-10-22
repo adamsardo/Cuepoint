@@ -15,6 +15,7 @@ thiserror = "2"
 # Independent reader used only in tests to check our files parse (MPL-2.0,
 # never shipped).
 rekordcrate = "0.3"
+binrw = "0.14"
 
 [lints]
 workspace = true

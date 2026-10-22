@@ -967,6 +967,7 @@ dependencies = [
  "cuepoint-analysis",
  "cuepoint-core",
  "cuepoint-engine",
+ "cuepoint-export",
  "cuepoint-library",
  "cuepoint-ui",
  "eframe",
@@ -1015,6 +1016,7 @@ dependencies = [
 name = "cuepoint-export"
 version = "0.1.0"
 dependencies = [
+ "binrw",
  "cuepoint-analysis",
  "cuepoint-core",
  "rekordcrate",

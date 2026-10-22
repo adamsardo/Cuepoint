@@ -38,7 +38,10 @@ pub struct PreparedTrack {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Progress {
     /// Copying audio and writing analysis for track `done + 1` of `total`.
-    Track { done: usize, total: usize },
+    Track {
+        done: usize,
+        total: usize,
+    },
     WritingLibrary,
 }
 
@@ -83,7 +86,9 @@ pub fn write_device(
         if let Some(parent) = audio_dest.parent() {
             fs::create_dir_all(parent).map_err(io_error(parent))?;
         }
-        let source_len = fs::metadata(&track.source).map_err(io_error(&track.source))?.len();
+        let source_len = fs::metadata(&track.source)
+            .map_err(io_error(&track.source))?
+            .len();
         let same = fs::metadata(&audio_dest).is_ok_and(|m| m.len() == source_len);
         if same {
             already_present += 1;
@@ -221,7 +226,10 @@ mod tests {
     #[test]
     fn sanitises_names_for_removable_media() {
         assert_eq!(sanitise("AC/DC: Live?").as_deref(), Some("AC_DC_ Live_"));
-        assert_eq!(sanitise("  trailing dots... ").as_deref(), Some("trailing dots"));
+        assert_eq!(
+            sanitise("  trailing dots... ").as_deref(),
+            Some("trailing dots")
+        );
         assert_eq!(sanitise("..."), None);
         assert_eq!(sanitise(""), None);
         let long = "é".repeat(200);

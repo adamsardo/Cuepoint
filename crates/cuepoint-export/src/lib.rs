@@ -5,6 +5,7 @@
 //! player) and the `.DAT`/`.EXT` analysis files.
 
 pub mod anlz;
+pub mod device;
 mod model;
 pub mod pdb;
 
