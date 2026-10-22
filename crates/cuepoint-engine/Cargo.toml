@@ -6,7 +6,25 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+default = ["device"]
+# Real audio output through cpal. Off for headless tests and offline renders.
+device = ["dep:cpal"]
+
 [dependencies]
+cpal = { version = "0.18", optional = true }
+cuepoint-core = { path = "../cuepoint-core" }
+cuepoint-dsp = { path = "../cuepoint-dsp" }
+rtrb = "0.4"
+audioadapter-buffers = "5.1"
+rubato = "5"
+symphonia = { version = "0.6", features = ["all"] }
+thiserror = "2"
+triple_buffer = "9"
+
+[dev-dependencies]
+assert_no_alloc = "1.1"
+hound = "3.5"
 
 [lints]
 workspace = true

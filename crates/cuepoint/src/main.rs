@@ -4,10 +4,14 @@
 //! rekordbox 6/7 `master.db`. The master.db key is read from
 //! `CUEPOINT_MASTERDB_KEY`, or asked for in the app.
 
+mod player;
+
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use cuepoint_library::Library;
-use cuepoint_ui::Browser;
+use cuepoint_ui::{Browser, BrowserAction};
+use player::Player;
 
 const KEY_ENV: &str = "CUEPOINT_MASTERDB_KEY";
 
@@ -23,7 +27,7 @@ fn main() -> eframe::Result {
         "Cuepoint",
         options,
         Box::new(move |_cc| {
-            let mut app = CuepointApp::default();
+            let mut app = CuepointApp::new();
             if let Some(path) = path {
                 app.open(path, std::env::var(KEY_ENV).ok());
             }
@@ -32,8 +36,8 @@ fn main() -> eframe::Result {
     )
 }
 
-#[derive(Default)]
 struct CuepointApp {
+    player: Player,
     library: Library,
     /// Where the current library came from.
     loaded_from: Option<PathBuf>,
@@ -56,6 +60,34 @@ struct KeyPrompt {
 }
 
 impl CuepointApp {
+    fn new() -> Self {
+        Self {
+            player: Player::new(),
+            library: Library::default(),
+            loaded_from: None,
+            browser: Browser::default(),
+            status: Status::default(),
+            key_prompt: None,
+        }
+    }
+
+    fn browser_action(&mut self, action: BrowserAction) {
+        match action {
+            BrowserAction::Load { track, deck } => {
+                let Some(track) = self.library.tracks().get(track).cloned() else {
+                    return;
+                };
+                let Some(deck) = deck.or_else(|| self.player.free_deck()) else {
+                    self.status = Status::Error("Both decks are playing.".into());
+                    return;
+                };
+                if let Err(message) = self.player.load(deck, track) {
+                    self.status = Status::Error(message);
+                }
+            }
+        }
+    }
+
     fn open(&mut self, path: PathBuf, key: Option<String>) {
         let result = if is_xml(&path) {
             cuepoint_library::xml::open(&path)
@@ -108,6 +140,19 @@ impl CuepointApp {
     }
 
     fn status_bar(&self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let output = self.player.output_description();
+            if self.player.output_is_silent() {
+                ui.colored_label(ui.visuals().warn_fg_color, output);
+            } else {
+                ui.weak(format!("Audio: {output}"));
+            }
+            ui.separator();
+            self.library_status(ui);
+        });
+    }
+
+    fn library_status(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| match &self.status {
             Status::Empty => {
                 ui.weak("No library open. File > Open rekordbox XML or master.db.");
@@ -162,10 +207,26 @@ impl CuepointApp {
 
 impl eframe::App for CuepointApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.player.poll_loads();
+        let state = self.player.state();
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
-        egui::CentralPanel::default().show(ui, |ui| self.browser.show(ui, &self.library));
+        egui::Panel::top("decks").show(ui, |ui| {
+            ui.columns(3, |columns| {
+                self.player.show_deck(&mut columns[0], 0, &state);
+                self.player.show_mixer(&mut columns[1], &state);
+                self.player.show_deck(&mut columns[2], 1, &state);
+            });
+        });
+        let action = egui::CentralPanel::default()
+            .show(ui, |ui| self.browser.show(ui, &self.library))
+            .inner;
+        if let Some(action) = action {
+            self.browser_action(action);
+        }
         self.key_window(ui);
+        // Keep playheads and meters moving.
+        ui.ctx().request_repaint_after(Duration::from_millis(16));
     }
 }
 

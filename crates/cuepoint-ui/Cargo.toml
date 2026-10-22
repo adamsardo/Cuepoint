@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 cuepoint-core = { path = "../cuepoint-core" }
+cuepoint-engine = { path = "../cuepoint-engine", default-features = false }
 cuepoint-library = { path = "../cuepoint-library", default-features = false }
 egui = "0.37"
 egui_extras = "0.37"
