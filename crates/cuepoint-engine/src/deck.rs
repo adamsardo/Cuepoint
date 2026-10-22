@@ -154,6 +154,11 @@ impl Deck {
         self.playing
     }
 
+    /// Serial of the load that put the current track on this deck.
+    pub fn load_serial(&self) -> u64 {
+        self.load_serial
+    }
+
     pub fn sync(&self) -> bool {
         self.sync
     }

@@ -165,7 +165,11 @@ impl DeckView {
         ui.horizontal(|ui| {
             let gridded = state.bpm.is_some();
             let sync = ui
-                .add_enabled(gridded, egui::Button::new("SYNC").selected(state.sync))
+                // Always allow switching sync off, even on an ungridded track.
+                .add_enabled(
+                    gridded || state.sync,
+                    egui::Button::new("SYNC").selected(state.sync),
+                )
                 .on_disabled_hover_text("Needs a beat grid");
             if sync.clicked() {
                 commands.push(Command::SetSync {
@@ -190,7 +194,8 @@ impl DeckView {
         ui.horizontal(|ui| {
             ui.label("TEMPO");
             // A synced follower's tempo is set by the master.
-            let following = state.sync && !state.master;
+            // Only a gridded follower has its tempo set by the master.
+            let following = state.sync && !state.master && state.bpm.is_some();
             if following {
                 self.tempo = state.tempo - 1.0;
                 self.tempo_range = TEMPO_RANGES

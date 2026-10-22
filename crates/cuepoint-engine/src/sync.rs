@@ -23,6 +23,8 @@ pub struct SyncManager {
     master: Option<usize>,
     was_playing: [bool; DECKS],
     needs_phase_lock: [bool; DECKS],
+    /// Load serial of the master's track, to notice it being replaced.
+    master_serial: u64,
 }
 
 fn gridded(deck: &Deck) -> bool {
@@ -42,6 +44,7 @@ impl SyncManager {
     pub fn set_master(&mut self, decks: &[Deck; DECKS], deck: usize) {
         if decks.get(deck).is_some_and(gridded) {
             self.master = Some(deck);
+            self.master_serial = decks[deck].load_serial();
         }
     }
 
@@ -62,6 +65,29 @@ impl SyncManager {
                 .find(|&d| decks[d].is_playing())
                 .or_else(|| others().next())
                 .or(Some(deck));
+            if let Some(master) = self.master {
+                self.master_serial = decks[master].load_serial();
+            }
+        }
+    }
+
+    /// When the master stops or its track is replaced, a synced deck that is
+    /// still playing takes over, so the live mix keeps its tempo (as
+    /// rekordbox moves MASTER to a playing deck).
+    fn hand_off_stopped_master(&mut self, decks: &[Deck; DECKS]) {
+        let Some(master) = self.master else { return };
+        let stopped = self.was_playing[master] && !decks[master].is_playing();
+        let replaced = decks[master].load_serial() != self.master_serial;
+        if stopped || replaced {
+            let heir = (0..DECKS).find(|&d| {
+                d != master && decks[d].sync() && decks[d].is_playing() && gridded(&decks[d])
+            });
+            if let Some(heir) = heir {
+                self.master = Some(heir);
+            }
+        }
+        if let Some(master) = self.master {
+            self.master_serial = decks[master].load_serial();
         }
     }
 
@@ -70,6 +96,7 @@ impl SyncManager {
         if self.master.is_some_and(|m| !gridded(&decks[m])) {
             self.master = None;
         }
+        self.hand_off_stopped_master(decks);
         for (index, deck) in decks.iter().enumerate() {
             if deck.is_playing() && !self.was_playing[index] && deck.sync() {
                 self.needs_phase_lock[index] = true;
@@ -244,6 +271,51 @@ mod tests {
         run(&mut sync, &mut decks, 0.1);
         decks[0].set_tempo(1.0);
         run(&mut sync, &mut decks, 1.0);
+        assert!((decks[1].bpm().unwrap() - 128.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn master_hands_off_to_playing_follower() {
+        let mut decks = [deck_with_grid(128.0, 0.0), deck_with_grid(120.0, 0.0)];
+        let mut sync = SyncManager::default();
+        decks[0].play_pause();
+        decks[1].play_pause();
+        sync.set_sync(&mut decks, 1, true);
+        run(&mut sync, &mut decks, 0.5);
+        assert_eq!(sync.master(), Some(0));
+
+        // Pausing the master passes MASTER to the deck still playing.
+        decks[0].play_pause();
+        run(&mut sync, &mut decks, 0.1);
+        assert_eq!(sync.master(), Some(1));
+
+        // A slower track loaded on the old master leaves the mix alone.
+        let pcm = Arc::new(Pcm::from_interleaved(
+            RATE,
+            vec![0.1; RATE as usize * 60 * 2],
+        ));
+        decks[0].load(pcm, 2).unwrap();
+        decks[0].set_grid(Some(Arc::new(BeatGrid::constant(100.0, 0.0, 1))));
+        run(&mut sync, &mut decks, 0.5);
+        assert!((decks[1].bpm().unwrap() - 128.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn replacing_a_stopped_master_track_hands_off_too() {
+        let mut decks = [deck_with_grid(128.0, 0.0), deck_with_grid(120.0, 0.0)];
+        let mut sync = SyncManager::default();
+        sync.set_sync(&mut decks, 1, true);
+        assert_eq!(sync.master(), Some(0));
+        decks[1].play_pause();
+        run(&mut sync, &mut decks, 0.2);
+        let pcm = Arc::new(Pcm::from_interleaved(
+            RATE,
+            vec![0.1; RATE as usize * 60 * 2],
+        ));
+        decks[0].load(pcm, 2).unwrap();
+        decks[0].set_grid(Some(Arc::new(BeatGrid::constant(100.0, 0.0, 1))));
+        run(&mut sync, &mut decks, 0.2);
+        assert_eq!(sync.master(), Some(1));
         assert!((decks[1].bpm().unwrap() - 128.0).abs() < 1e-9);
     }
 }
