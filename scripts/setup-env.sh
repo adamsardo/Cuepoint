@@ -4,6 +4,9 @@
 # Safe to re-run: each step skips if its output already exists.
 set -euo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+log() { echo "[setup $(date +%H:%M:%S)] $*"; }
+
 GHIDRA_VERSION="12.1.4"
 GHIDRA_ZIP="ghidra_${GHIDRA_VERSION}_PUBLIC_20260921.zip"
 GHIDRA_URL="https://sourceforge.net/projects/ghidra.mirror/files/Ghidra_${GHIDRA_VERSION}_build/${GHIDRA_ZIP}/download"
@@ -13,45 +16,40 @@ RB_VERSION="7.2.19"
 RB_URL="https://cdn.rekordbox.com/files/20260914095016/Install_rekordbox_7_2_19.pkg_.zip"
 RB_DIR="/opt/rekordbox/${RB_VERSION}"
 
-# Extraction tools for .pkg (xar archive) and its gzip/cpio payloads
-if ! command -v 7z >/dev/null || ! command -v cpio >/dev/null; then
-  apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq p7zip-full cpio >/dev/null
-fi
-
 # Ghidra
 if [ ! -x "${GHIDRA_DIR}/support/analyzeHeadless" ]; then
   tmp="$(mktemp -d)"
+  log "downloading Ghidra ${GHIDRA_VERSION} (~570 MB)"
   curl -fsSL --retry 3 -o "${tmp}/ghidra.zip" "${GHIDRA_URL}"
+  log "unzipping Ghidra"
   unzip -q "${tmp}/ghidra.zip" -d "${tmp}"
   rm -rf "${GHIDRA_DIR}"
   mv "${tmp}"/ghidra_${GHIDRA_VERSION}_PUBLIC "${GHIDRA_DIR}"
   rm -rf "${tmp}"
 fi
+log "Ghidra ready: ${GHIDRA_DIR}"
 
-# rekordbox: zip -> .pkg -> component pkgs -> Payload -> rekordbox.app
+# rekordbox: zip -> .pkg (xar) -> gzip'd cpio Payload -> rekordbox.app
 if [ ! -d "${RB_DIR}/payload" ]; then
   mkdir -p "${RB_DIR}"
+  log "downloading rekordbox ${RB_VERSION} installer (~940 MB)"
   curl -fsSL --retry 3 -o "${RB_DIR}/installer.zip" "${RB_URL}"
+  log "unzipping installer"
   unzip -q -o "${RB_DIR}/installer.zip" -d "${RB_DIR}/zip"
-  pkg="$(find "${RB_DIR}/zip" -name '*.pkg' -print -quit)"
-  # -txar: unpack the xar layer only (otherwise 7z also gunzips Payload)
-  7z x -txar -y -bd -o"${RB_DIR}/pkg" "${pkg}" >/dev/null
-  mkdir -p "${RB_DIR}/payload"
-  # Each component package has its own Payload (gzip'd cpio)
-  find "${RB_DIR}/pkg" -name Payload -type f | while read -r payload; do
-    name="$(basename "$(dirname "${payload}")" .pkg)"
-    mkdir -p "${RB_DIR}/payload/${name}"
-    (cd "${RB_DIR}/payload/${name}" && gzip -dc "${payload}" | cpio -idm --quiet)
-  done
   rm -f "${RB_DIR}/installer.zip"
+  pkg="$(find "${RB_DIR}/zip" -name '*.pkg' -print -quit)"
+  log "unpacking ${pkg##*/}"
+  python3 "${HERE}/unpack_pkg.py" "${pkg}" "${RB_DIR}/payload.tmp"
+  mv "${RB_DIR}/payload.tmp" "${RB_DIR}/payload"
 fi
+log "rekordbox ready: ${RB_DIR}/payload"
 
 # Split the universal main binary into per-arch slices (no lipo on Linux)
 RB_BIN="${RB_DIR}/payload/rekordbox/rekordbox.app/Contents/MacOS/rekordbox"
 if [ ! -d "${RB_DIR}/slices" ]; then
-  mkdir -p "${RB_DIR}/slices"
-  python3 - "${RB_BIN}" "${RB_DIR}/slices" <<'PY'
+  log "splitting universal binary"
+  mkdir -p "${RB_DIR}/slices.tmp"
+  python3 - "${RB_BIN}" "${RB_DIR}/slices.tmp" <<'PY'
 import struct, sys
 src, out = sys.argv[1], sys.argv[2]
 names = {0x01000007: "x86_64", 0x0100000C: "arm64"}
@@ -64,9 +62,7 @@ with open(src, "rb") as f:
         path = f"{out}/rekordbox-{names.get(cputype & 0xFFFFFFFF, hex(cputype))}"
         with open(path, "wb") as o:
             o.write(f.read(size))
-        print(path)
 PY
+  mv "${RB_DIR}/slices.tmp" "${RB_DIR}/slices"
 fi
-
-echo "Ghidra: ${GHIDRA_DIR}"
-echo "rekordbox: ${RB_DIR}/payload"
+log "slices ready: $(ls "${RB_DIR}/slices" | tr '\n' ' ')"
