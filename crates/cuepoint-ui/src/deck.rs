@@ -1,9 +1,11 @@
 //! Deck panel: track info, overview waveform, transport, loops and tempo
 //! (spec 05-ui, section 2.4). Emits engine commands; never touches audio.
 
-use cuepoint_core::Track;
+use cuepoint_core::{BeatGrid, MusicalKey, Track};
 use cuepoint_engine::{Command, DeckState};
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
+
+use crate::waveform::BandWaveform;
 
 const WAVEFORM_HEIGHT: f32 = 64.0;
 const CUE_COLOUR: Color32 = Color32::from_rgb(255, 150, 30);
@@ -21,6 +23,11 @@ pub struct LoadedTrack {
     pub track: Track,
     /// Peak envelope across the whole track, 0..=1 per bin.
     pub overview: Vec<f32>,
+    /// 3-band detail waveform from analysis.
+    pub bands: Option<BandWaveform>,
+    /// Grid in use: the library's when it has one, else analysis'.
+    pub grid: BeatGrid,
+    pub key: Option<MusicalKey>,
 }
 
 /// UI-side state of one deck.
@@ -76,14 +83,22 @@ impl DeckView {
             }
         });
         ui.horizontal(|ui| {
-            let base_bpm = self
+            let library_bpm = self
                 .loaded
                 .as_ref()
                 .and_then(|l| l.track.bpm)
-                .map(|b| b.as_f64());
-            let bpm = base_bpm.map_or("--.--".to_owned(), |b| format!("{:.2}", b * state.tempo));
+                .map(|b| b.as_f64() * state.tempo);
+            let bpm = state
+                .bpm
+                .or(library_bpm)
+                .map_or("--.--".to_owned(), |b| format!("{b:.2}"));
             ui.label(RichText::new(bpm).size(22.0).monospace().strong());
             ui.label(RichText::new("BPM").small());
+            if let Some(key) = self.loaded.as_ref().and_then(|l| l.key) {
+                ui.separator();
+                ui.label(RichText::new(key.camelot()).monospace().strong())
+                    .on_hover_text(key.name());
+            }
             ui.separator();
             ui.label(RichText::new(format!("{:+.2}%", (state.tempo - 1.0) * 100.0)).monospace());
             ui.separator();
@@ -148,13 +163,50 @@ impl DeckView {
             }
         });
         ui.horizontal(|ui| {
+            let gridded = state.bpm.is_some();
+            let sync = ui
+                .add_enabled(gridded, egui::Button::new("SYNC").selected(state.sync))
+                .on_disabled_hover_text("Needs a beat grid");
+            if sync.clicked() {
+                commands.push(Command::SetSync {
+                    deck,
+                    on: !state.sync,
+                });
+            }
+            let master =
+                ui.add_enabled(gridded, egui::Button::new("MASTER").selected(state.master));
+            if master.clicked() {
+                commands.push(Command::SetSyncMaster { deck });
+            }
+            for (label, beats) in [("◀4", -4.0), ("4▶", 4.0)] {
+                let jump = ui
+                    .add_enabled(gridded, egui::Button::new(label))
+                    .on_hover_text("Beat jump");
+                if jump.clicked() {
+                    commands.push(Command::BeatJump { deck, beats });
+                }
+            }
+            ui.separator();
             ui.label("TEMPO");
+            // A synced follower's tempo is set by the master.
+            let following = state.sync && !state.master;
+            if following {
+                self.tempo = state.tempo - 1.0;
+                self.tempo_range = TEMPO_RANGES
+                    .iter()
+                    .map(|r| r.0)
+                    .find(|&r| self.tempo.abs() <= r)
+                    .unwrap_or(1.0);
+            }
             let range = self.tempo_range;
             let slider = egui::Slider::new(&mut self.tempo, -range..=range)
                 .show_value(false)
                 .smart_aim(false);
             let changed = ui
-                .add_sized(Vec2::new(ui.available_width() - 150.0, 18.0), slider)
+                .add_enabled_ui(!following, |ui| {
+                    ui.add_sized(Vec2::new(ui.available_width() - 150.0, 18.0), slider)
+                })
+                .inner
                 .changed();
             if ui.small_button("0").on_hover_text("Reset tempo").clicked() || changed {
                 if !changed {
