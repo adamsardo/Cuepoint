@@ -93,6 +93,12 @@ impl SyncManager {
             else {
                 continue;
             };
+            // A stopped master (tempo -100% in WIDE) gives no tempo to follow,
+            // and would never leave the folding loops below.
+            if !(master_bpm > 0.0 && master_bpm.is_finite() && own_bpm > 0.0) {
+                decks[slave].set_bend(0.0);
+                continue;
+            }
             let mut ratio = master_bpm / own_bpm;
             while ratio > 1.5 {
                 ratio /= 2.0;
@@ -225,5 +231,19 @@ mod tests {
         decks[0].unload();
         sync.update(&mut decks);
         assert_eq!(sync.master(), None);
+    }
+
+    #[test]
+    fn stopped_master_does_not_hang_sync() {
+        let mut decks = [deck_with_grid(128.0, 0.0), deck_with_grid(124.0, 0.0)];
+        let mut sync = SyncManager::default();
+        decks[0].play_pause();
+        decks[1].play_pause();
+        sync.set_sync(&mut decks, 1, true);
+        decks[0].set_tempo(0.0);
+        run(&mut sync, &mut decks, 0.1);
+        decks[0].set_tempo(1.0);
+        run(&mut sync, &mut decks, 1.0);
+        assert!((decks[1].bpm().unwrap() - 128.0).abs() < 1e-9);
     }
 }

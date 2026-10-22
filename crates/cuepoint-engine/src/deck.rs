@@ -199,10 +199,15 @@ impl Deck {
     }
 
     /// Moves the playhead by `beats` on the grid, cross-faded if audible.
+    /// Moves the playhead by `beats` grid beats, following the grid
+    /// through any tempo changes.
     pub fn shift_beats(&mut self, beats: f64) {
-        if let Some(bpm) = self.grid_bpm() {
-            let frames = beats * 60.0 / bpm * self.sample_rate;
-            self.seek(self.position + frames);
+        let Some(grid) = &self.grid else { return };
+        let target = grid
+            .beat_at(self.seconds())
+            .and_then(|beat| grid.time_of_beat(beat + beats));
+        if let Some(target) = target {
+            self.seek(target * self.sample_rate);
         }
     }
 
@@ -596,5 +601,30 @@ mod tests {
             "{}",
             state.position
         );
+    }
+
+    #[test]
+    fn beat_jump_follows_tempo_changes() {
+        use cuepoint_core::TempoMarker;
+        let mut deck = Deck::new(48_000);
+        deck.load(ramp_track(48_000 * 30), 1).unwrap();
+        deck.set_grid(Some(Arc::new(BeatGrid::from_markers(vec![
+            TempoMarker {
+                time: 0.0,
+                bpm: 120.0,
+                beat_in_bar: 1,
+            },
+            TempoMarker {
+                time: 10.0,
+                bpm: 60.0,
+                beat_in_bar: 1,
+            },
+        ]))));
+        deck.seek(9.0 * 48_000.0);
+        deck.shift_beats(4.0);
+        // Beats 18, 19 at 120 BPM, then 20 at 10 s and 21, 22 at 60 BPM.
+        assert!((deck.state().position / 48_000.0 - 12.0).abs() < 1e-9);
+        deck.shift_beats(-4.0);
+        assert!((deck.state().position / 48_000.0 - 9.0).abs() < 1e-9);
     }
 }
