@@ -1018,6 +1018,7 @@ dependencies = [
  "cuepoint-analysis",
  "cuepoint-core",
  "rekordcrate",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

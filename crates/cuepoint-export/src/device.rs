@@ -68,6 +68,7 @@ pub fn write_device(
     fs::create_dir_all(&library_dir).map_err(io_error(&library_dir))?;
 
     let mut used_paths = HashSet::new();
+    let mut used_analysis = HashSet::new();
     let total = tracks.len();
     let mut already_present = 0;
     for (index, track) in tracks.iter_mut().enumerate() {
@@ -76,7 +77,7 @@ pub fn write_device(
         }
         track.row.id = u32::try_from(index + 1).unwrap_or(u32::MAX);
         track.row.device_path = unique_device_path(&track.row, &track.source, &mut used_paths);
-        track.row.analysis_path = anlz::analysis_path(&track.row.device_path);
+        track.row.analysis_path = unique_analysis_path(&track.row.device_path, &mut used_analysis);
 
         let audio_dest = on_device(root, &track.row.device_path);
         if let Some(parent) = audio_dest.parent() {
@@ -149,6 +150,18 @@ fn unique_device_path(row: &ExportTrack, source: &Path, used: &mut HashSet<Strin
         }
     }
     unreachable!("an unused name always exists")
+}
+
+/// The analysis folder is a hash of the audio path, so two tracks can very
+/// rarely land in the same folder; re-hash with a counter until free.
+fn unique_analysis_path(device_path: &str, used: &mut HashSet<String>) -> String {
+    let mut path = anlz::analysis_path(device_path);
+    let mut n = 1;
+    while !used.insert(path.to_lowercase()) {
+        n += 1;
+        path = anlz::analysis_path(&format!("{device_path}#{n}"));
+    }
+    path
 }
 
 /// A name safe on FAT32/exFAT/HFS+/APFS: no path separators, reserved
