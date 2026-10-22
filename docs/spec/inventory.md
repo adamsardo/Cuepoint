@@ -37,15 +37,15 @@ Totals: about 1,340 checklist lines and 168 open questions. Item counts are bull
 
 AlphaTheta code, model weights, skins, icons, sample packs, mapping CSVs, lighting macros, the rekordbox name and logo. No DRM decryption, licence or activation checks, or telemetry. `DeviceAuth` (player HID handshake) is reimplemented only if Ghidra shows it is not an anti-clone check.
 
-## Decisions needed
+## Decisions
 
-Each has a recommendation; see the linked spec for detail.
+Agreed 2026-10-22.
 
-1. **What "pure Rust" allows.** Recommended: pure Rust everywhere, with C allowed only behind a trait for SQLite/SQLCipher at first (`rusqlite` bundled), then replaced by a pure-Rust SQLCipher page codec. Platform FFI (CoreAudio via `cpal`, Syphon, IOHID) lives in small crates that may use `unsafe`.
-2. **Ableton Link** (03). Only Rust binding is GPL. Recommended: clean-room pure-Rust implementation of the Link wire protocol from packet captures; keeps the workspace permissive.
-3. **ML inference** (04). Recommended: `candle` or `tract` (pure Rust), not ONNX Runtime.
-4. **HE-AAC decoding** (03). `symphonia` lacks it. Recommended: add HE-AAC (SBR/PS) support to `symphonia` upstream rather than call Apple's decoder.
-5. **Workspace licence.** Currently MIT OR Apache-2.0.
+1. **Pure Rust, with two temporary exceptions.** C is allowed only for SQLite/SQLCipher, behind a trait (`rusqlite` with bundled SQLCipher), until a pure-Rust SQLCipher page codec replaces it. Platform FFI (CoreAudio via `cpal`, Syphon, IOHID) lives in small, isolated crates that may use `unsafe`.
+2. **Ableton Link:** our own clean-room Rust implementation of the wire protocol, built from observed network behaviour. No GPL code.
+3. **ML inference:** `candle`.
+4. **HE-AAC:** we add HE-AAC (SBR/PS) decoding to `symphonia` ourselves and offer it upstream.
+5. **Licence:** MIT OR Apache-2.0.
 
 ## Build order
 

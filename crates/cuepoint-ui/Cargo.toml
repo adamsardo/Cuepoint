@@ -7,6 +7,10 @@ license.workspace = true
 publish = false
 
 [dependencies]
+cuepoint-core = { path = "../cuepoint-core" }
+cuepoint-library = { path = "../cuepoint-library", default-features = false }
+egui = "0.37"
+egui_extras = "0.37"
 
 [lints]
 workspace = true
