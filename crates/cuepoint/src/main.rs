@@ -1,7 +1,8 @@
 //! Cuepoint desktop app.
 //!
 //! Usage: `cuepoint [LIBRARY]`, where LIBRARY is a rekordbox XML export or a
-//! rekordbox 6/7 `master.db`. The master.db key is read from
+//! rekordbox 6/7 `master.db`; or `cuepoint export LIBRARY DEVICE_ROOT` to
+//! export the collection to a USB/SD device without opening a window. The master.db key is read from
 //! `CUEPOINT_MASTERDB_KEY`, or asked for in the app.
 
 mod export;
@@ -17,7 +18,17 @@ use player::Player;
 const KEY_ENV: &str = "CUEPOINT_MASTERDB_KEY";
 
 fn main() -> eframe::Result {
-    let path = std::env::args_os().nth(1).map(PathBuf::from);
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|a| a == "export") {
+        std::process::exit(match args.as_slice() {
+            [_, library, dest] => export_cli(Path::new(library), Path::new(dest)),
+            _ => {
+                eprintln!("usage: cuepoint export LIBRARY DEVICE_ROOT");
+                2
+            }
+        });
+    }
+    let path = args.first().map(PathBuf::from);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Cuepoint")
@@ -311,6 +322,48 @@ impl eframe::App for CuepointApp {
         // Keep playheads and meters moving.
         ui.ctx().request_repaint_after(Duration::from_millis(16));
     }
+}
+
+/// `cuepoint export LIBRARY DEVICE_ROOT`: exports the whole collection
+/// without opening a window. Returns the process exit code.
+fn export_cli(library: &Path, dest: &Path) -> i32 {
+    let opened = if is_xml(library) {
+        cuepoint_library::xml::open(library)
+    } else {
+        let Ok(key) = std::env::var(KEY_ENV) else {
+            eprintln!("set {KEY_ENV} to open a master.db");
+            return 2;
+        };
+        cuepoint_library::master_db::open(library, &key)
+    };
+    let library = match opened {
+        Ok(library) => library,
+        Err(error) => {
+            eprintln!("{}: {error}", library.display());
+            return 1;
+        }
+    };
+    let job = export::start(&library, &cuepoint_ui::Source::Collection, dest.to_owned());
+    for update in job.updates.iter() {
+        match update {
+            export::Update::Status(text) => eprintln!("{text}"),
+            export::Update::Finished(Ok(report)) => {
+                println!(
+                    "Exported {} tracks and {} playlists to {} ({} already present).",
+                    report.tracks,
+                    report.playlists,
+                    dest.display(),
+                    report.already_present
+                );
+                return 0;
+            }
+            export::Update::Finished(Err(error)) => {
+                eprintln!("{error}");
+                return 1;
+            }
+        }
+    }
+    1
 }
 
 fn is_xml(path: &Path) -> bool {
