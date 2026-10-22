@@ -1,0 +1,12 @@
+[package]
+name = "cuepoint-library"
+description = "Collection database: tracks, playlists, smart playlists, history, MyTags, import/export."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

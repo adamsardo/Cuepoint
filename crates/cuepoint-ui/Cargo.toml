@@ -1,0 +1,12 @@
+[package]
+name = "cuepoint-ui"
+description = "egui widgets and panels: decks, waveforms, browser, mixer, preferences."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true
