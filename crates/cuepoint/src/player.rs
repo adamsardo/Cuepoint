@@ -3,9 +3,10 @@
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use cuepoint_core::Track;
+use cuepoint_analysis::AnalysisSettings;
+use cuepoint_core::{MusicalKey, Track};
 use cuepoint_engine::{AudioOutput, Command, DECKS, EngineHandle, EngineState, Pcm};
-use cuepoint_ui::{DeckView, LoadedTrack, MixerView};
+use cuepoint_ui::{BandWaveform, DeckView, LoadedTrack, MixerView};
 
 /// Overview resolution; enough for a full-width waveform on large screens.
 const OVERVIEW_BINS: usize = 2048;
@@ -14,8 +15,36 @@ struct Decoded {
     deck: usize,
     /// Matches `Player::load_ids[deck]` unless a newer load superseded it.
     id: u64,
-    track: Track,
-    result: Result<(Arc<Pcm>, Vec<f32>), String>,
+    title: String,
+    result: Result<(Arc<Pcm>, LoadedTrack), String>,
+}
+
+/// Decodes and analyses a track. Library data wins over analysis where the
+/// library has it (rekordbox's own grid and key), so imported grids match.
+fn prepare(track: Track, rate: u32) -> Result<(Arc<Pcm>, LoadedTrack), String> {
+    let path = track.location.clone().ok_or("no file location")?;
+    let pcm = cuepoint_engine::decode_file(&path, rate).map_err(|e| e.to_string())?;
+    let analysis = cuepoint_analysis::analyze(pcm.samples(), rate, &AnalysisSettings::default());
+    let grid = if track.beatgrid.is_empty() {
+        analysis.grid
+    } else {
+        track.beatgrid.clone()
+    };
+    let key = MusicalKey::parse(&track.key).or(analysis.key);
+    let waveform = analysis.waveform;
+    let loaded = LoadedTrack {
+        overview: pcm.overview(OVERVIEW_BINS),
+        bands: Some(BandWaveform {
+            points_per_second: waveform.points_per_second,
+            low: waveform.low,
+            mid: waveform.mid,
+            high: waveform.high,
+        }),
+        grid,
+        key,
+        track,
+    };
+    Ok((Arc::new(pcm), loaded))
 }
 
 pub struct Player {
@@ -81,9 +110,9 @@ impl Player {
                 deck + 1
             ));
         }
-        let Some(path) = track.location.clone() else {
+        if track.location.is_none() {
             return Err(format!("\"{}\" has no file location.", track.title));
-        };
+        }
         self.load_ids[deck] += 1;
         let id = self.load_ids[deck];
         self.decks[deck].message = Some(format!("Loading {}…", track.title));
@@ -92,16 +121,12 @@ impl Player {
         std::thread::Builder::new()
             .name(format!("cuepoint-load-{deck}"))
             .spawn(move || {
-                let result = cuepoint_engine::decode_file(&path, rate)
-                    .map(|pcm| {
-                        let overview = pcm.overview(OVERVIEW_BINS);
-                        (Arc::new(pcm), overview)
-                    })
-                    .map_err(|e| e.to_string());
+                let title = track.title.clone();
+                let result = prepare(track, rate);
                 let _ = tx.send(Decoded {
                     deck,
                     id,
-                    track,
+                    title,
                     result,
                 });
             })
@@ -118,27 +143,23 @@ impl Player {
                 continue;
             }
             match decoded.result {
-                Ok((pcm, overview)) => {
+                Ok((pcm, loaded)) => {
+                    let grid = (!loaded.grid.is_empty()).then(|| Arc::new(loaded.grid.clone()));
                     let sent = self.handle.send(Command::Load {
                         deck,
                         pcm,
+                        grid,
                         serial: decoded.id,
                     });
                     if sent {
-                        let loaded = LoadedTrack {
-                            track: decoded.track,
-                            overview,
-                        };
                         self.awaiting[deck] = Some((decoded.id, loaded));
                     } else {
                         self.decks[deck].message = Some("Audio engine is not responding.".into());
                     }
                 }
                 Err(error) => {
-                    self.decks[deck].message = Some(format!(
-                        "Could not load \"{}\": {error}",
-                        decoded.track.title
-                    ));
+                    self.decks[deck].message =
+                        Some(format!("Could not load \"{}\": {error}", decoded.title));
                 }
             }
         }
@@ -170,6 +191,19 @@ impl Player {
             &mut self.commands,
         );
         self.flush();
+    }
+
+    /// Both decks' scrolling detail waveforms, stacked.
+    pub fn show_detail_waveforms(&self, ui: &mut egui::Ui, state: &EngineState) {
+        for (deck, view) in self.decks.iter().enumerate() {
+            cuepoint_ui::detail_waveform(
+                ui,
+                72.0,
+                view.loaded.as_ref(),
+                &state.decks[deck],
+                state.sample_rate,
+            );
+        }
     }
 
     pub fn show_mixer(&mut self, ui: &mut egui::Ui, state: &EngineState) {
