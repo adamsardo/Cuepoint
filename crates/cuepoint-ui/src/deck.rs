@@ -186,7 +186,8 @@ impl DeckView {
                     commands.push(Command::BeatJump { deck, beats });
                 }
             }
-            ui.separator();
+        });
+        ui.horizontal(|ui| {
             ui.label("TEMPO");
             // A synced follower's tempo is set by the master.
             let following = state.sync && !state.master;
