@@ -281,8 +281,13 @@ impl Deck {
                 let wrapped = start + (self.position - stop);
                 self.jump(wrapped);
             }
-            // Start the stop fade while samples remain so the end never clicks.
-            if self.playing && self.position + f64::from(DECLICK_FRAMES) * self.tempo >= end {
+            // Start the stop fade while samples remain so the end never clicks,
+            // unless an active loop will wrap before the end is reached.
+            let loop_wraps = self.loop_active && self.loop_out.is_some_and(|stop| stop <= end);
+            if self.playing
+                && !loop_wraps
+                && self.position + f64::from(DECLICK_FRAMES) * self.tempo >= end
+            {
                 self.previewing = false;
                 self.stop_at(end);
             }
@@ -470,5 +475,25 @@ mod tests {
         settle(&mut deck);
         assert!(deck.load(ramp_track(10_000), 3).unwrap().is_some());
         assert_eq!(deck.state().load_serial, 3);
+    }
+
+    #[test]
+    fn loop_ending_at_track_end_keeps_looping() {
+        let mut deck = Deck::default();
+        deck.load(ramp_track(10_000), 1).unwrap();
+        deck.seek(9_000.0);
+        deck.loop_in();
+        deck.seek(10_000.0);
+        deck.loop_out();
+        deck.seek(9_000.0);
+        deck.play_pause();
+        run(&mut deck, 5_000);
+        let state = deck.state();
+        assert!(state.playing && state.loop_active);
+        assert!(
+            (9_000.0..10_000.0).contains(&state.position),
+            "{}",
+            state.position
+        );
     }
 }
