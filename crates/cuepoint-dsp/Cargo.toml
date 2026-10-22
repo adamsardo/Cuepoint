@@ -1,0 +1,12 @@
+[package]
+name = "cuepoint-dsp"
+description = "DSP building blocks: time-stretch, key shift, filters and effects."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

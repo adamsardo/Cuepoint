@@ -1,0 +1,12 @@
+[package]
+name = "cuepoint-control"
+description = "Controller I/O: MIDI and HID devices, mappings, MIDI learn, keyboard shortcuts."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

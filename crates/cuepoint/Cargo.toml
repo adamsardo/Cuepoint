@@ -1,0 +1,17 @@
+[package]
+name = "cuepoint"
+description = "Cuepoint desktop app."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+cuepoint-library = { path = "../cuepoint-library" }
+cuepoint-ui = { path = "../cuepoint-ui" }
+eframe = "0.37"
+egui = "0.37"
+rfd = "0.17"
+
+[lints]
+workspace = true

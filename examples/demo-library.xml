@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DJ_PLAYLISTS Version="1.0.0">
+  <PRODUCT Name="Cuepoint demo" Version="0.1.0" Company="Cuepoint"/>
+  <COLLECTION Entries="40">
+    <TRACK TrackID="1" Name="Paper Harbour" Artist="Coastline Radio" Album="Demo Sessions 2" Genre="Electro" Kind="FLAC File" TotalTime="514" AverageBpm="118.00" Tonality="12A" Rating="204" DateAdded="2026-02-11" Location="file://localhost/Music/Demo/Paper%20Harbour.flac" Colour="0xFFA500"/>
+    <TRACK TrackID="2" Name="Midnight Echo" Artist="The Saltwater Club" Album="Demo Sessions 3" Genre="Techno" Kind="FLAC File" TotalTime="454" AverageBpm="120.25" Tonality="8A" Rating="0" DateAdded="2026-03-12" Location="file://localhost/Music/Demo/Midnight%20Echo.flac" Colour="0xFFA500"/>
+    <TRACK TrackID="3" Name="Static Tide" Artist="Kestrel Unit" Album="Demo Sessions 4" Genre="Ambient" Kind="FLAC File" TotalTime="354" AverageBpm="135.00" Tonality="1B" Rating="0" DateAdded="2026-04-13" Location="file://localhost/Music/Demo/Static%20Tide.flac" Colour="0xFF007F"/>
+    <TRACK TrackID="4" Name="Hollow Drift" Artist="Low Orbit" Album="Demo Sessions 1" Genre="Deep House" Kind="FLAC File" TotalTime="516" AverageBpm="128.00" Tonality="10A" Rating="204" DateAdded="2026-05-14" Location="file://localhost/Music/Demo/Hollow%20Drift.flac" Colour="0xFFA500"/>
+    <TRACK TrackID="5" Name="Quiet Harbour" Artist="Mara Vance" Album="Demo Sessions 2" Genre="Disco" Kind="FLAC File" TotalTime="430" AverageBpm="135.00" Tonality="3A" Rating="204" DateAdded="2026-06-15" Location="file://localhost/Music/Demo/Quiet%20Harbour.flac" Colour="0xFFA500"/>
+    <TRACK TrackID="6" Name="Midnight Machine" Artist="The Saltwater Club" Album="Demo Sessions 3" Genre="Breaks" Kind="FLAC File" TotalTime="400" AverageBpm="132.25" Tonality="8B" Rating="102" DateAdded="2026-07-16" Location="file://localhost/Music/Demo/Midnight%20Machine.flac"/>
+    <TRACK TrackID="7" Name="Neon Engine" Artist="Low Orbit" Album="Demo Sessions 4" Genre="Electro" Kind="FLAC File" TotalTime="534" AverageBpm="124.00" Tonality="11B" Rating="102" DateAdded="2026-08-17" Location="file://localhost/Music/Demo/Neon%20Engine.flac" Colour="0x25FDE9"/>
+    <TRACK TrackID="8" Name="Electric Circuit" Artist="Dune Theory" Album="Demo Sessions 1" Genre="Disco" Kind="FLAC File" TotalTime="502" AverageBpm="120.00" Tonality="6A" Rating="102" DateAdded="2026-09-18" Location="file://localhost/Music/Demo/Electric%20Circuit.flac" Colour="0x660099"/>
+    <TRACK TrackID="9" Name="Solar Circuit" Artist="Coastline Radio" Album="Demo Sessions 2" Genre="Techno" Kind="FLAC File" TotalTime="414" AverageBpm="120.50" Tonality="11B" Rating="204" DateAdded="2026-01-19" Location="file://localhost/Music/Demo/Solar%20Circuit.flac" Colour="0x0000FF"/>
+    <TRACK TrackID="10" Name="Iron Signal" Artist="Mara Vance" Album="Demo Sessions 3" Genre="Deep House" Kind="FLAC File" TotalTime="271" AverageBpm="130.00" Tonality="8B" Rating="102" DateAdded="2026-02-20" Location="file://localhost/Music/Demo/Iron%20Signal.flac" Colour="0x25FDE9"/>
+    <TRACK TrackID="11" Name="Electric Tide" Artist="Ivo Paskal" Album="Demo Sessions 4" Genre="Techno" Kind="FLAC File" TotalTime="326" AverageBpm="130.50" Tonality="11B" Rating="0" DateAdded="2026-03-21" Location="file://localhost/Music/Demo/Electric%20Tide.flac" Colour="0xFFA500"/>
+    <TRACK TrackID="12" Name="Hollow Garden" Artist="Low Orbit" Album="Demo Sessions 1" Genre="Electro" Kind="FLAC File" TotalTime="440" AverageBpm="124.25" Tonality="3A" Rating="51" DateAdded="2026-04-22" Location="file://localhost/Music/Demo/Hollow%20Garden.flac"/>
+    <TRACK TrackID="13" Name="Iron Tide" Artist="Dune Theory" Album="Demo Sessions 2" Genre="House" Kind="FLAC File" TotalTime="452" AverageBpm="128.50" Tonality="1B" Rating="51" DateAdded="2026-05-23" Location="file://localhost/Music/Demo/Iron%20Tide.flac" Colour="0x0000FF"/>
+    <TRACK TrackID="14" Name="Solar Signal" Artist="Low Orbit" Album="Demo Sessions 3" Genre="House" Kind="FLAC File" TotalTime="246" AverageBpm="124.00" Tonality="6A" Rating="102" DateAdded="2026-06-24" Location="file://localhost/Music/Demo/Solar%20Signal.flac"/>
+    <TRACK TrackID="15" Name="Neon Drift" Artist="Low Orbit" Album="Demo Sessions 4" Genre="Breaks" Kind="FLAC File" TotalTime="529" AverageBpm="132.50" Tonality="5A" Rating="255" DateAdded="2026-07-25" Location="file://localhost/Music/Demo/Neon%20Drift.flac" Colour="0x0000FF"/>
+    <TRACK TrackID="16" Name="Static Machine" Artist="Kestrel Unit" Album="Demo Sessions 1" Genre="Breaks" Kind="FLAC File" TotalTime="443" AverageBpm="132.25" Tonality="1B" Rating="0" DateAdded="2026-08-26" Location="file://localhost/Music/Demo/Static%20Machine.flac" Colour="0x660099"/>
+    <TRACK TrackID="17" Name="Iron Bloom" Artist="Coastline Radio" Album="Demo Sessions 2" Genre="Techno" Kind="FLAC File" TotalTime="346" AverageBpm="124.00" Tonality="6A" Rating="0" DateAdded="2026-09-27" Location="file://localhost/Music/Demo/Iron%20Bloom.flac"/>
+    <TRACK TrackID="18" Name="Paper Machine" Artist="Kestrel Unit" Album="Demo Sessions 3" Genre="Techno" Kind="FLAC File" TotalTime="514" AverageBpm="118.00" Tonality="12A" Rating="204" DateAdded="2026-01-10" Location="file://localhost/Music/Demo/Paper%20Machine.flac" Colour="0xFFA500"/>
+    <TRACK TrackID="19" Name="Midnight Signal" Artist="The Saltwater Club" Album="Demo Sessions 4" Genre="Disco" Kind="FLAC File" TotalTime="369" AverageBpm="128.00" Tonality="12A" Rating="153" DateAdded="2026-02-11" Location="file://localhost/Music/Demo/Midnight%20Signal.flac" Colour="0x0000FF"/>
+    <TRACK TrackID="20" Name="Velvet Signal" Artist="Nadia Ferro" Album="Demo Sessions 1" Genre="Breaks" Kind="FLAC File" TotalTime="399" AverageBpm="130.25" Tonality="5A" Rating="0" DateAdded="2026-03-12" Location="file://localhost/Music/Demo/Velvet%20Signal.flac" Colour="0xFFA500"/>
+    <TRACK TrackID="21" Name="Electric Motion" Artist="Dune Theory" Album="Demo Sessions 2" Genre="Breaks" Kind="FLAC File" TotalTime="345" AverageBpm="122.00" Tonality="5A" Rating="255" DateAdded="2026-04-13" Location="file://localhost/Music/Demo/Electric%20Motion.flac" Colour="0x0000FF"/>
+    <TRACK TrackID="22" Name="Static Drift" Artist="Dune Theory" Album="Demo Sessions 3" Genre="Electro" Kind="FLAC File" TotalTime="505" AverageBpm="120.50" Tonality="6A" Rating="102" DateAdded="2026-05-14" Location="file://localhost/Music/Demo/Static%20Drift.flac" Colour="0x0000FF"/>
+    <TRACK TrackID="23" Name="Hollow Echo" Artist="Ivo Paskal" Album="Demo Sessions 4" Genre="Electro" Kind="FLAC File" TotalTime="362" AverageBpm="124.00" Tonality="8A" Rating="51" DateAdded="2026-06-15" Location="file://localhost/Music/Demo/Hollow%20Echo.flac" Colour="0x660099"/>
+    <TRACK TrackID="24" Name="Static Circuit" Artist="Ivo Paskal" Album="Demo Sessions 1" Genre="Electro" Kind="FLAC File" TotalTime="383" AverageBpm="118.00" Tonality="9A" Rating="51" DateAdded="2026-07-16" Location="file://localhost/Music/Demo/Static%20Circuit.flac"/>
+    <TRACK TrackID="25" Name="Electric Machine" Artist="Ivo Paskal" Album="Demo Sessions 2" Genre="Breaks" Kind="FLAC File" TotalTime="281" AverageBpm="126.50" Tonality="4A" Rating="51" DateAdded="2026-08-17" Location="file://localhost/Music/Demo/Electric%20Machine.flac" Colour="0x00FF00"/>
+    <TRACK TrackID="26" Name="Iron Engine" Artist="Ivo Paskal" Album="Demo Sessions 3" Genre="House" Kind="FLAC File" TotalTime="485" AverageBpm="130.00" Tonality="3A" Rating="255" DateAdded="2026-09-18" Location="file://localhost/Music/Demo/Iron%20Engine.flac" Colour="0x0000FF"/>
+    <TRACK TrackID="27" Name="Velvet Tide" Artist="The Saltwater Club" Album="Demo Sessions 4" Genre="Breaks" Kind="FLAC File" TotalTime="410" AverageBpm="122.25" Tonality="1B" Rating="153" DateAdded="2026-01-19" Location="file://localhost/Music/Demo/Velvet%20Tide.flac" Colour="0xFFA500"/>
+    <TRACK TrackID="28" Name="Glass Avenue" Artist="Mara Vance" Album="Demo Sessions 1" Genre="Electro" Kind="FLAC File" TotalTime="305" AverageBpm="122.00" Tonality="5A" Rating="204" DateAdded="2026-02-20" Location="file://localhost/Music/Demo/Glass%20Avenue.flac" Colour="0xFF007F"/>
+    <TRACK TrackID="29" Name="Iron Bloom" Artist="Low Orbit" Album="Demo Sessions 2" Genre="Disco" Kind="FLAC File" TotalTime="419" AverageBpm="135.25" Tonality="5A" Rating="0" DateAdded="2026-03-21" Location="file://localhost/Music/Demo/Iron%20Bloom.flac" Colour="0xFFFF00"/>
+    <TRACK TrackID="30" Name="Midnight Avenue" Artist="Mara Vance" Album="Demo Sessions 3" Genre="Disco" Kind="FLAC File" TotalTime="339" AverageBpm="122.25" Tonality="1A" Rating="102" DateAdded="2026-04-22" Location="file://localhost/Music/Demo/Midnight%20Avenue.flac" Colour="0x00FF00"/>
+    <TRACK TrackID="31" Name="Hollow Garden" Artist="The Saltwater Club" Album="Demo Sessions 4" Genre="Ambient" Kind="FLAC File" TotalTime="372" AverageBpm="135.50" Tonality="5A" Rating="0" DateAdded="2026-05-23" Location="file://localhost/Music/Demo/Hollow%20Garden.flac" Colour="0x660099"/>
+    <TRACK TrackID="32" Name="Electric Motion" Artist="Nadia Ferro" Album="Demo Sessions 1" Genre="Electro" Kind="FLAC File" TotalTime="496" AverageBpm="135.25" Tonality="5A" Rating="204" DateAdded="2026-06-24" Location="file://localhost/Music/Demo/Electric%20Motion.flac" Colour="0xFFFF00"/>
+    <TRACK TrackID="33" Name="Static Drift" Artist="Nadia Ferro" Album="Demo Sessions 2" Genre="Ambient" Kind="FLAC File" TotalTime="316" AverageBpm="122.00" Tonality="5A" Rating="153" DateAdded="2026-07-25" Location="file://localhost/Music/Demo/Static%20Drift.flac" Colour="0xFFFF00"/>
+    <TRACK TrackID="34" Name="Golden Avenue" Artist="Mara Vance" Album="Demo Sessions 3" Genre="Disco" Kind="FLAC File" TotalTime="505" AverageBpm="118.50" Tonality="4A" Rating="204" DateAdded="2026-08-26" Location="file://localhost/Music/Demo/Golden%20Avenue.flac"/>
+    <TRACK TrackID="35" Name="Midnight Engine" Artist="The Saltwater Club" Album="Demo Sessions 4" Genre="Deep House" Kind="FLAC File" TotalTime="499" AverageBpm="118.00" Tonality="1A" Rating="0" DateAdded="2026-09-27" Location="file://localhost/Music/Demo/Midnight%20Engine.flac"/>
+    <TRACK TrackID="36" Name="Iron Motion" Artist="The Saltwater Club" Album="Demo Sessions 1" Genre="Electro" Kind="FLAC File" TotalTime="500" AverageBpm="125.25" Tonality="8A" Rating="255" DateAdded="2026-01-10" Location="file://localhost/Music/Demo/Iron%20Motion.flac"/>
+    <TRACK TrackID="37" Name="Static Garden" Artist="The Saltwater Club" Album="Demo Sessions 2" Genre="Ambient" Kind="FLAC File" TotalTime="453" AverageBpm="130.00" Tonality="1B" Rating="153" DateAdded="2026-02-11" Location="file://localhost/Music/Demo/Static%20Garden.flac" Colour="0xFFA500"/>
+    <TRACK TrackID="38" Name="Paper Signal" Artist="The Saltwater Club" Album="Demo Sessions 3" Genre="Breaks" Kind="FLAC File" TotalTime="395" AverageBpm="120.00" Tonality="5A" Rating="255" DateAdded="2026-03-12" Location="file://localhost/Music/Demo/Paper%20Signal.flac" Colour="0xFFA500"/>
+    <TRACK TrackID="39" Name="Quiet Bloom" Artist="Ivo Paskal" Album="Demo Sessions 4" Genre="House" Kind="FLAC File" TotalTime="479" AverageBpm="125.00" Tonality="4A" Rating="153" DateAdded="2026-04-13" Location="file://localhost/Music/Demo/Quiet%20Bloom.flac" Colour="0x00FF00"/>
+    <TRACK TrackID="40" Name="Iron Harbour" Artist="The Saltwater Club" Album="Demo Sessions 1" Genre="House" Kind="FLAC File" TotalTime="413" AverageBpm="128.25" Tonality="7A" Rating="102" DateAdded="2026-05-14" Location="file://localhost/Music/Demo/Iron%20Harbour.flac" Colour="0x660099"/>
+  </COLLECTION>
+  <PLAYLISTS>
+    <NODE Type="0" Name="ROOT" Count="3">
+      <NODE Name="Warm Up" Type="1" KeyType="0" Entries="8">
+        <TRACK Key="21"/>
+        <TRACK Key="6"/>
+        <TRACK Key="24"/>
+        <TRACK Key="2"/>
+        <TRACK Key="22"/>
+        <TRACK Key="30"/>
+        <TRACK Key="29"/>
+        <TRACK Key="37"/>
+      </NODE>
+      <NODE Type="0" Name="Gigs" Count="2">
+        <NODE Name="Friday Peak Time" Type="1" KeyType="0" Entries="12">
+          <TRACK Key="25"/>
+          <TRACK Key="22"/>
+          <TRACK Key="34"/>
+          <TRACK Key="19"/>
+          <TRACK Key="33"/>
+          <TRACK Key="5"/>
+          <TRACK Key="8"/>
+          <TRACK Key="15"/>
+          <TRACK Key="7"/>
+          <TRACK Key="3"/>
+          <TRACK Key="9"/>
+          <TRACK Key="30"/>
+        </NODE>
+        <NODE Name="Sunday Closing" Type="1" KeyType="0" Entries="6">
+          <TRACK Key="3"/>
+          <TRACK Key="12"/>
+          <TRACK Key="18"/>
+          <TRACK Key="9"/>
+          <TRACK Key="28"/>
+          <TRACK Key="17"/>
+        </NODE>
+      </NODE>
+      <NODE Name="Digging" Type="1" KeyType="0" Entries="15">
+        <TRACK Key="26"/>
+        <TRACK Key="10"/>
+        <TRACK Key="35"/>
+        <TRACK Key="33"/>
+        <TRACK Key="32"/>
+        <TRACK Key="21"/>
+        <TRACK Key="6"/>
+        <TRACK Key="18"/>
+        <TRACK Key="4"/>
+        <TRACK Key="40"/>
+        <TRACK Key="23"/>
+        <TRACK Key="34"/>
+        <TRACK Key="14"/>
+        <TRACK Key="3"/>
+        <TRACK Key="9"/>
+      </NODE>
+    </NODE>
+  </PLAYLISTS>
+</DJ_PLAYLISTS>

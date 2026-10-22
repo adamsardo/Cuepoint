@@ -1,0 +1,12 @@
+[package]
+name = "cuepoint-lighting"
+description = "Lighting mode: fixtures, scenes and DMX output."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

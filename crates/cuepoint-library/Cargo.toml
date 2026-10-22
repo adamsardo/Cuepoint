@@ -1,0 +1,23 @@
+[package]
+name = "cuepoint-library"
+description = "Collection database: tracks, playlists, smart playlists, history, MyTags, import/export."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = ["master-db"]
+# Reads rekordbox 6/7 master.db. Pulls in SQLCipher and OpenSSL (C), one of
+# the two agreed temporary exceptions to pure Rust.
+master-db = ["dep:rusqlite"]
+
+[dependencies]
+cuepoint-core = { path = "../cuepoint-core" }
+percent-encoding = "2.3"
+quick-xml = "0.42"
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"], optional = true }
+thiserror = "2"
+
+[lints]
+workspace = true

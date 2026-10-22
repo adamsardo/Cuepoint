@@ -1,0 +1,12 @@
+[package]
+name = "cuepoint-services"
+description = "Online services: streaming catalogues, cloud storage and library sync."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true
