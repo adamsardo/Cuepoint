@@ -8,6 +8,7 @@ mod deck;
 mod engine;
 mod mixer;
 mod output;
+mod sync;
 
 pub use audio::{DecodeError, Pcm, decode_file};
 pub use deck::{DECLICK_FRAMES, DeckState};

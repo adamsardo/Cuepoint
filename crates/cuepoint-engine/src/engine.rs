@@ -2,16 +2,18 @@
 //!
 //! The UI talks to the engine only through a bounded command queue and reads
 //! a state snapshot published once per block (spec 03, section 7.3 rules 1,
-//! 2 and 4). Tracks replaced on a deck are sent back on a trash queue so
-//! their memory is freed off the audio thread (rule 3).
+//! 2 and 4). Tracks and grids replaced on a deck are sent back on a trash
+//! queue so their memory is freed off the audio thread (rule 3).
 
 use std::sync::Arc;
 
+use cuepoint_core::BeatGrid;
 use triple_buffer::TripleBuffer;
 
 use crate::audio::Pcm;
 use crate::deck::{Deck, DeckState};
 use crate::mixer::{CHANNELS, CrossfaderAssign, EqBand, Mixer, MixerState};
+use crate::sync::SyncManager;
 
 pub const DECKS: usize = CHANNELS;
 /// Frames processed per internal block; device buffers are split to fit.
@@ -27,7 +29,24 @@ pub enum Command {
     Load {
         deck: usize,
         pcm: Arc<Pcm>,
+        grid: Option<Arc<BeatGrid>>,
         serial: u64,
+    },
+    SetGrid {
+        deck: usize,
+        grid: Option<Arc<BeatGrid>>,
+    },
+    /// Jumps by whole beats on the grid (negative is backwards).
+    BeatJump {
+        deck: usize,
+        beats: f64,
+    },
+    SetSync {
+        deck: usize,
+        on: bool,
+    },
+    SetSyncMaster {
+        deck: usize,
     },
     Unload {
         deck: usize,
@@ -78,9 +97,16 @@ pub enum Command {
     SetCrossfader {
         position: f32,
     },
+    /// Master output level.
     SetMaster {
         position: f32,
     },
+}
+
+/// Memory released by the audio thread, freed on the control thread.
+pub enum Garbage {
+    Pcm(#[allow(dead_code)] Arc<Pcm>),
+    Grid(#[allow(dead_code)] Arc<BeatGrid>),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -98,8 +124,9 @@ pub struct Engine {
     decks: [Deck; DECKS],
     mixer: Mixer,
     commands: rtrb::Consumer<Command>,
-    trash: rtrb::Producer<Arc<Pcm>>,
+    trash: rtrb::Producer<Garbage>,
     state: triple_buffer::Input<EngineState>,
+    sync: SyncManager,
     deck_buffers: [Box<[(f32, f32)]>; DECKS],
     mix_buffer: Box<[(f32, f32)]>,
     blocks: u64,
@@ -109,7 +136,7 @@ pub struct Engine {
 pub struct EngineHandle {
     sample_rate: u32,
     commands: rtrb::Producer<Command>,
-    trash: rtrb::Consumer<Arc<Pcm>>,
+    trash: rtrb::Consumer<Garbage>,
     state: triple_buffer::Output<EngineState>,
 }
 
@@ -125,11 +152,12 @@ pub fn engine(sample_rate: u32) -> (EngineHandle, Engine) {
     let silent = || vec![(0.0, 0.0); MAX_BLOCK].into_boxed_slice();
     let engine = Engine {
         sample_rate,
-        decks: Default::default(),
+        decks: std::array::from_fn(|_| Deck::new(sample_rate)),
         mixer: Mixer::new(sample_rate),
         commands: command_rx,
         trash: trash_tx,
         state: state_in,
+        sync: SyncManager::default(),
         deck_buffers: [silent(), silent()],
         mix_buffer: silent(),
         blocks: 0,
@@ -168,22 +196,50 @@ impl Engine {
 
     fn apply(&mut self, command: Command) {
         match command {
-            Command::Load { deck, pcm, serial } => {
+            Command::Load {
+                deck,
+                pcm,
+                grid,
+                serial,
+            } => {
                 let Some(d) = self.decks.get_mut(deck) else {
-                    return self.discard(pcm);
+                    self.discard(Garbage::Pcm(pcm));
+                    return self.discard_grid(grid);
                 };
                 match d.load(pcm, serial) {
-                    Ok(Some(old)) | Err(old) => self.discard(old),
-                    Ok(None) => {}
+                    Ok(old) => {
+                        let old_grid = d.set_grid(grid);
+                        if let Some(old) = old {
+                            self.discard(Garbage::Pcm(old));
+                        }
+                        self.discard_grid(old_grid);
+                    }
+                    Err(refused) => {
+                        self.discard(Garbage::Pcm(refused));
+                        self.discard_grid(grid);
+                    }
                 }
             }
             Command::Unload { deck } => {
-                if let Some(d) = self.decks.get_mut(deck)
-                    && let Some(old) = d.unload()
-                {
-                    self.discard(old);
+                if let Some(d) = self.decks.get_mut(deck) {
+                    let old = d.unload();
+                    let old_grid = d.set_grid(None);
+                    if let Some(old) = old {
+                        self.discard(Garbage::Pcm(old));
+                    }
+                    self.discard_grid(old_grid);
                 }
             }
+            Command::SetGrid { deck, grid } => match self.decks.get_mut(deck) {
+                Some(d) => {
+                    let old = d.set_grid(grid);
+                    self.discard_grid(old);
+                }
+                None => self.discard_grid(grid),
+            },
+            Command::BeatJump { deck, beats } => self.with_deck(deck, |d| d.shift_beats(beats)),
+            Command::SetSync { deck, on } => self.sync.set_sync(&mut self.decks, deck, on),
+            Command::SetSyncMaster { deck } => self.sync.set_master(&self.decks, deck),
             Command::PlayPause { deck } => self.with_deck(deck, Deck::play_pause),
             Command::CueDown { deck } => self.with_deck(deck, Deck::cue_down),
             Command::CueUp { deck } => self.with_deck(deck, Deck::cue_up),
@@ -207,10 +263,16 @@ impl Engine {
         }
     }
 
-    /// Hands a released track to the control thread. If that queue is full
-    /// the track is dropped here, which allocates nothing but may free.
-    fn discard(&mut self, pcm: Arc<Pcm>) {
-        let _ = self.trash.push(pcm);
+    /// Hands released memory to the control thread. If that queue is full
+    /// it is dropped here, which allocates nothing but may free.
+    fn discard(&mut self, garbage: Garbage) {
+        let _ = self.trash.push(garbage);
+    }
+
+    fn discard_grid(&mut self, grid: Option<Arc<BeatGrid>>) {
+        if let Some(grid) = grid {
+            self.discard(Garbage::Grid(grid));
+        }
     }
 
     /// Fills interleaved `out` with `channels` channels; the mix goes to the
@@ -224,6 +286,7 @@ impl Engine {
         }
         for chunk in out.chunks_mut(MAX_BLOCK * channels) {
             let frames = chunk.len() / channels;
+            self.sync.update(&mut self.decks);
             for (deck, buffer) in self.decks.iter_mut().zip(&mut self.deck_buffers) {
                 deck.render(&mut buffer[..frames]);
             }
@@ -247,8 +310,9 @@ impl Engine {
     fn publish(&mut self) {
         let state = self.state.input_buffer_mut();
         state.sample_rate = self.sample_rate;
-        for (slot, deck) in state.decks.iter_mut().zip(&self.decks) {
+        for (index, (slot, deck)) in state.decks.iter_mut().zip(&self.decks).enumerate() {
             *slot = deck.state();
+            slot.master = self.sync.master() == Some(index);
         }
         state.mixer = self.mixer.state();
         state.blocks = self.blocks;
@@ -270,6 +334,7 @@ mod tests {
         handle.send(Command::Load {
             deck: 0,
             pcm: tone(48_000, 0.5),
+            grid: None,
             serial: 1,
         });
         handle.send(Command::PlayPause { deck: 0 });
@@ -290,12 +355,14 @@ mod tests {
         handle.send(Command::Load {
             deck: 1,
             pcm: first.clone(),
+            grid: None,
             serial: 1,
         });
         engine.process(&mut [0.0; 64], 2);
         handle.send(Command::Load {
             deck: 1,
             pcm: tone(1000, 0.2),
+            grid: None,
             serial: 1,
         });
         engine.process(&mut [0.0; 64], 2);
@@ -321,11 +388,13 @@ mod tests {
             Command::Load {
                 deck: 0,
                 pcm: tone(96_000, 0.3),
+                grid: None,
                 serial: 1,
             },
             Command::Load {
                 deck: 1,
                 pcm: tone(96_000, 0.3),
+                grid: None,
                 serial: 1,
             },
             Command::PlayPause { deck: 0 },
@@ -349,6 +418,7 @@ mod tests {
             Command::Load {
                 deck: 0,
                 pcm: tone(96_000, 0.3),
+                grid: None,
                 serial: 1,
             },
             Command::CueDown { deck: 1 },
@@ -367,6 +437,7 @@ mod tests {
         handle.send(Command::Load {
             deck: 0,
             pcm: tone(48_000, 0.5),
+            grid: None,
             serial: 1,
         });
         handle.send(Command::PlayPause { deck: 0 });

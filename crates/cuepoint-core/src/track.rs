@@ -2,6 +2,8 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::BeatGrid;
+
 /// Identifier of a track within one library. rekordbox uses decimal strings
 /// in `master.db` and integers in XML; both are kept as text.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -94,6 +96,8 @@ pub struct Track {
     /// `YYYY-MM-DD` when known.
     pub date_added: String,
     pub location: Option<PathBuf>,
+    /// Grid from the source library, empty when it has none.
+    pub beatgrid: BeatGrid,
 }
 
 #[cfg(test)]

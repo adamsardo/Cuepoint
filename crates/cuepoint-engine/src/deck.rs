@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use cuepoint_core::BeatGrid;
 use cuepoint_dsp::{Ramp, hermite};
 
 use crate::audio::Pcm;
@@ -35,6 +36,14 @@ pub struct DeckState {
     pub load_serial: u64,
     /// Serial of the last load refused because the deck was playing.
     pub rejected_serial: u64,
+    /// Beat sync engaged.
+    pub sync: bool,
+    /// This deck is the sync master.
+    pub master: bool,
+    /// Current tempo in BPM (grid tempo × playback speed), when gridded.
+    pub bpm: Option<f64>,
+    /// Fractional beat position on the grid, when gridded.
+    pub beat: Option<f64>,
 }
 
 pub struct Deck {
@@ -55,6 +64,12 @@ pub struct Deck {
     fade_from: Option<(f64, u32)>,
     load_serial: u64,
     rejected_serial: u64,
+    sample_rate: f64,
+    grid: Option<Arc<BeatGrid>>,
+    /// Temporary speed offset used by sync to pull the phase into line,
+    /// e.g. 0.01 plays 1% fast. Not shown as tempo.
+    bend: f64,
+    sync: bool,
 }
 
 impl Default for Deck {
@@ -74,11 +89,22 @@ impl Default for Deck {
             fade_from: None,
             load_serial: 0,
             rejected_serial: 0,
+            sample_rate: 48_000.0,
+            grid: None,
+            bend: 0.0,
+            sync: false,
         }
     }
 }
 
 impl Deck {
+    pub fn new(sample_rate: u32) -> Self {
+        Self {
+            sample_rate: f64::from(sample_rate),
+            ..Self::default()
+        }
+    }
+
     /// Loads a track, stopped at its start, unless the deck is playing
     /// (rekordbox's default "lock playing deck"); then the track is handed
     /// back as `Err`. On success returns the previous track. Either way the
@@ -97,7 +123,8 @@ impl Deck {
         self.reset(None)
     }
 
-    /// Fresh state holding `pcm`, keeping tempo and load bookkeeping.
+    /// Fresh state holding `pcm`, keeping tempo, sync, grid and load
+    /// bookkeeping. The grid is replaced separately with `set_grid`.
     fn reset(&mut self, pcm: Option<Arc<Pcm>>) -> Option<Arc<Pcm>> {
         let old = self.pcm.take();
         *self = Self {
@@ -105,9 +132,88 @@ impl Deck {
             tempo: self.tempo,
             load_serial: self.load_serial,
             rejected_serial: self.rejected_serial,
+            sample_rate: self.sample_rate,
+            grid: self.grid.take(),
+            sync: self.sync,
             ..Self::default()
         };
         old
+    }
+
+    /// Replaces the beat grid, returning the old one for freeing off the
+    /// audio thread.
+    pub fn set_grid(&mut self, grid: Option<Arc<BeatGrid>>) -> Option<Arc<BeatGrid>> {
+        std::mem::replace(&mut self.grid, grid)
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.pcm.is_some()
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.playing
+    }
+
+    /// Serial of the load that put the current track on this deck.
+    pub fn load_serial(&self) -> u64 {
+        self.load_serial
+    }
+
+    pub fn sync(&self) -> bool {
+        self.sync
+    }
+
+    pub fn set_sync(&mut self, on: bool) {
+        self.sync = on;
+        if !on {
+            self.bend = 0.0;
+        }
+    }
+
+    pub fn set_bend(&mut self, bend: f64) {
+        self.bend = bend;
+    }
+
+    /// Playback speed including any sync bend.
+    fn speed(&self) -> f64 {
+        self.tempo * (1.0 + self.bend)
+    }
+
+    fn seconds(&self) -> f64 {
+        self.position / self.sample_rate
+    }
+
+    /// Beat position at the playhead, from the grid.
+    pub fn beat(&self) -> Option<f64> {
+        self.grid.as_ref()?.beat_at(self.seconds())
+    }
+
+    /// The grid's own tempo at the playhead, ignoring playback speed.
+    pub fn grid_bpm(&self) -> Option<f64> {
+        self.grid.as_ref()?.bpm_at(self.seconds())
+    }
+
+    /// Tempo heard now: grid tempo times the tempo setting.
+    pub fn bpm(&self) -> Option<f64> {
+        Some(self.grid_bpm()? * self.tempo)
+    }
+
+    #[cfg(test)]
+    pub fn tempo(&self) -> f64 {
+        self.tempo
+    }
+
+    /// Moves the playhead by `beats` on the grid, cross-faded if audible.
+    /// Moves the playhead by `beats` grid beats, following the grid
+    /// through any tempo changes.
+    pub fn shift_beats(&mut self, beats: f64) {
+        let Some(grid) = &self.grid else { return };
+        let target = grid
+            .beat_at(self.seconds())
+            .and_then(|beat| grid.time_of_beat(beat + beats));
+        if let Some(target) = target {
+            self.seek(target * self.sample_rate);
+        }
     }
 
     fn frames(&self) -> f64 {
@@ -127,6 +233,10 @@ impl Deck {
             loop_active: self.loop_active,
             load_serial: self.load_serial,
             rejected_serial: self.rejected_serial,
+            sync: self.sync,
+            master: false,
+            bpm: self.bpm(),
+            beat: self.beat(),
         }
     }
 
@@ -253,6 +363,7 @@ impl Deck {
             return;
         };
         let end = pcm.frames() as f64;
+        let speed = self.speed();
         for frame in out.iter_mut() {
             let gain = self.gain.next_value();
             if gain == 0.0 && !self.playing {
@@ -269,11 +380,11 @@ impl Deck {
                 let (ol, or) = Self::sample(&pcm, old);
                 l = l * (1.0 - w) + ol * w;
                 r = r * (1.0 - w) + or * w;
-                self.fade_from = (left > 1).then_some((old + self.tempo, left - 1));
+                self.fade_from = (left > 1).then_some((old + speed, left - 1));
             }
             *frame = (l * gain, r * gain);
 
-            self.position += self.tempo;
+            self.position += speed;
             if self.loop_active
                 && let (Some(start), Some(stop)) = (self.loop_in, self.loop_out)
                 && self.position >= stop
@@ -286,7 +397,7 @@ impl Deck {
             let loop_wraps = self.loop_active && self.loop_out.is_some_and(|stop| stop <= end);
             if self.playing
                 && !loop_wraps
-                && self.position + f64::from(DECLICK_FRAMES) * self.tempo >= end
+                && self.position + f64::from(DECLICK_FRAMES) * speed >= end
             {
                 self.previewing = false;
                 self.stop_at(end);
@@ -495,5 +606,30 @@ mod tests {
             "{}",
             state.position
         );
+    }
+
+    #[test]
+    fn beat_jump_follows_tempo_changes() {
+        use cuepoint_core::TempoMarker;
+        let mut deck = Deck::new(48_000);
+        deck.load(ramp_track(48_000 * 30), 1).unwrap();
+        deck.set_grid(Some(Arc::new(BeatGrid::from_markers(vec![
+            TempoMarker {
+                time: 0.0,
+                bpm: 120.0,
+                beat_in_bar: 1,
+            },
+            TempoMarker {
+                time: 10.0,
+                bpm: 60.0,
+                beat_in_bar: 1,
+            },
+        ]))));
+        deck.seek(9.0 * 48_000.0);
+        deck.shift_beats(4.0);
+        // Beats 18, 19 at 120 BPM, then 20 at 10 s and 21, 22 at 60 BPM.
+        assert!((deck.state().position / 48_000.0 - 12.0).abs() < 1e-9);
+        deck.shift_beats(-4.0);
+        assert!((deck.state().position / 48_000.0 - 9.0).abs() < 1e-9);
     }
 }

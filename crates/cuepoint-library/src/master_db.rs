@@ -100,6 +100,9 @@ fn read_tracks(conn: &Connection) -> Result<Vec<Track>> {
             location: Some(field.text(22))
                 .filter(|p| !p.is_empty())
                 .map(PathBuf::from),
+            // master.db keeps grids in the ANLZ files under AnalysisDataPath,
+            // not in the database; reading those comes with device export.
+            beatgrid: Default::default(),
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)

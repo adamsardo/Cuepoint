@@ -212,6 +212,8 @@ impl eframe::App for CuepointApp {
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         egui::Panel::top("decks").show(ui, |ui| {
+            self.player.show_detail_waveforms(ui, &state);
+            ui.add_space(4.0);
             ui.columns(3, |columns| {
                 self.player.show_deck(&mut columns[0], 0, &state);
                 self.player.show_mixer(&mut columns[1], &state);

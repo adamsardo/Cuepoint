@@ -7,6 +7,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+cuepoint-analysis = { path = "../cuepoint-analysis" }
 cuepoint-core = { path = "../cuepoint-core" }
 cuepoint-engine = { path = "../cuepoint-engine" }
 cuepoint-library = { path = "../cuepoint-library" }

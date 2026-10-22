@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use cuepoint_core::{Bpm, PlaylistKind, PlaylistNode, Rating, Track, TrackColour, TrackId};
+use cuepoint_core::{
+    BeatGrid, Bpm, PlaylistKind, PlaylistNode, Rating, TempoMarker, Track, TrackColour, TrackId,
+};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
 
@@ -54,6 +56,8 @@ pub fn parse(text: &str) -> Result<Library> {
     let mut stack: Vec<(PlaylistNode, KeyType)> = Vec::new();
     let mut roots = Vec::new();
     let mut in_collection = false;
+    // TEMPO markers of the collection track being read.
+    let mut markers = Vec::new();
     let mut in_playlists = false;
     let mut node_count = 0usize;
     // quick-xml reports EOF without checking that every element closed, so
@@ -81,6 +85,7 @@ pub fn parse(text: &str) -> Result<Library> {
                 depth -= 1;
                 match e.name().as_ref() {
                     "COLLECTION" => in_collection = false,
+                    "TRACK" if in_collection => finish_grid(&mut tracks, &mut markers),
                     "PLAYLISTS" => in_playlists = false,
                     "NODE" => close_node(&mut stack, &mut roots),
                     _ => {}
@@ -99,12 +104,16 @@ pub fn parse(text: &str) -> Result<Library> {
         match element.name().as_ref() {
             "COLLECTION" => in_collection = !is_empty,
             "PLAYLISTS" => in_playlists = !is_empty,
+            "TEMPO" if in_collection => markers.extend(tempo_marker(&attrs)),
             "TRACK" if in_collection && stack.is_empty() => {
                 let track = track_from(&attrs);
                 if let Some(location) = attrs.get("Location") {
                     location_ids.insert(location.to_owned(), track.id.clone());
                 }
                 tracks.push(track);
+                if is_empty {
+                    finish_grid(&mut tracks, &mut markers);
+                }
             }
             "NODE" if in_playlists => {
                 node_count += 1;
@@ -148,6 +157,25 @@ pub fn parse(text: &str) -> Result<Library> {
         _ => roots,
     };
     Ok(Library::new(tracks, playlists))
+}
+
+/// `TEMPO Inizio="0.025" Bpm="128.00" Metro="4/4" Battito="1"`: a grid
+/// marker at `Inizio` seconds whose beat is number `Battito` in its bar.
+fn tempo_marker(attrs: &Attrs) -> Option<TempoMarker> {
+    Some(TempoMarker {
+        time: attrs.number("Inizio")?,
+        bpm: attrs.number("Bpm")?,
+        beat_in_bar: attrs.number("Battito").unwrap_or(1),
+    })
+}
+
+fn finish_grid(tracks: &mut [Track], markers: &mut Vec<TempoMarker>) {
+    if let Some(track) = tracks.last_mut()
+        && !markers.is_empty()
+    {
+        track.beatgrid = BeatGrid::from_markers(std::mem::take(markers));
+    }
+    markers.clear();
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -221,6 +249,8 @@ fn track_from(attrs: &Attrs) -> Track {
         kind: attrs.text("Kind"),
         date_added: attrs.text("DateAdded"),
         location: attrs.get("Location").and_then(location_to_path),
+        // Filled from the TRACK's TEMPO children by `finish_grid`.
+        beatgrid: BeatGrid::default(),
     }
 }
 
@@ -309,6 +339,11 @@ mod tests {
         );
         assert_eq!(t.year, Some(1987));
         assert_eq!(t.file_size, Some(9876543));
+        let marker = t.beatgrid.markers()[0];
+        assert_eq!(
+            (marker.time, marker.bpm, marker.beat_in_bar),
+            (0.025, 125.0, 1)
+        );
 
         let windows = library.track(&TrackId("12".into())).unwrap();
         assert_eq!(
@@ -318,6 +353,7 @@ mod tests {
         let untimed = library.track(&TrackId("13".into())).unwrap();
         assert_eq!(untimed.bpm, None);
         assert_eq!(untimed.rating.stars(), 5);
+        assert!(windows.beatgrid.is_empty() && untimed.beatgrid.is_empty());
     }
 
     #[test]

@@ -56,6 +56,11 @@ impl Pcm {
         self.samples.len() / 2
     }
 
+    /// Interleaved left/right samples.
+    pub fn samples(&self) -> &[f32] {
+        &self.samples
+    }
+
     pub fn duration_secs(&self) -> f64 {
         self.frames() as f64 / f64::from(self.sample_rate)
     }
