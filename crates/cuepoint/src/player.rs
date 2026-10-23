@@ -174,7 +174,8 @@ impl Player {
     pub fn free_deck(&mut self) -> Option<usize> {
         let state = self.handle.state();
         let empty = |deck: &usize| {
-            self.decks[*deck].loaded.is_none() && self.decks[*deck].message.is_none()
+            let view = &self.decks[*deck];
+            view.loaded.is_none() && view.loading.is_none() && view.message.is_none()
         };
         (0..DECKS)
             .find(empty)
@@ -212,7 +213,12 @@ impl Player {
             .name(format!("cuepoint-load-{deck}"))
             .spawn(move || {
                 let title = track.title.clone();
-                let result = prepare(track, rate, cache.as_deref());
+                // A panic in decoding or analysis must still end the load,
+                // or the deck would show it loading forever.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    prepare(track, rate, cache.as_deref())
+                }))
+                .unwrap_or_else(|_| Err("decoding or analysis crashed".into()));
                 let _ = tx.send(Decoded {
                     deck,
                     id,
@@ -261,8 +267,16 @@ impl Player {
         for (deck, slot) in self.awaiting.iter_mut().enumerate() {
             let Some((serial, _)) = slot else { continue };
             let deck_state = &state.decks[deck];
+            // A newer load may have been requested since this one was sent.
+            let superseded = *serial != self.load_ids[deck];
             if deck_state.load_serial == *serial {
                 let (_, loaded) = slot.take().expect("checked above");
+                // The engine now holds this track, so show it as loaded, but
+                // keep the newer load's progress showing until it arrives.
+                if superseded {
+                    self.decks[deck].loaded = Some(loaded);
+                    continue;
+                }
                 if timing()
                     && let Some(started) = self.load_started[deck].take()
                 {
@@ -277,6 +291,9 @@ impl Player {
                 self.decks[deck].message = None;
             } else if deck_state.rejected_serial == *serial {
                 *slot = None;
+                if superseded {
+                    continue;
+                }
                 self.decks[deck].loading = None;
                 self.decks[deck].message = Some(format!(
                     "Deck {} started playing, so the load was cancelled.",

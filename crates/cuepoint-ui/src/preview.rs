@@ -49,7 +49,14 @@ impl PreviewCache {
                     while let Some(path) = next() {
                         let file = cache_dir.as_deref().and_then(|dir| cache_file(dir, &path));
                         let preview = file.as_deref().and_then(read_cached).or_else(|| {
-                            let preview = worker(&path)?;
+                            // A panic counts as no preview and keeps the
+                            // worker alive for the rest of the queue.
+                            let preview =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    worker(&path)
+                                }))
+                                .ok()
+                                .flatten()?;
                             if let Some(file) = &file {
                                 write_cached(file, &preview);
                             }

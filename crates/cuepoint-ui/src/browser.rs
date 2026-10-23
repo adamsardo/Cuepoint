@@ -215,6 +215,10 @@ pub struct Browser {
     /// Row the context menu was opened on.
     context_row: Option<usize>,
     view: ListView,
+    /// A text field had focus when this frame began. Return in a single-line
+    /// field drops its focus before the list reads the keys, so the list
+    /// must not take that Return as "load".
+    typing: bool,
 }
 
 impl Default for Browser {
@@ -233,6 +237,7 @@ impl Default for Browser {
             tree_scroll: 0.0,
             context_row: None,
             view: ListView::Standard,
+            typing: false,
         }
     }
 }
@@ -317,6 +322,7 @@ impl Browser {
         previews: &mut PreviewCache,
     ) -> Option<BrowserAction> {
         self.refresh(library);
+        self.typing = ui.ctx().memory(|m| m.focused().is_some());
         let p = ui.painter_at(rect);
         paint::fill(&p, rect, theme::BLACK);
         let rail = Rect::from_min_max(
@@ -1173,7 +1179,7 @@ impl Browser {
         {
             action = Some(BrowserAction::Load {
                 track: self.rows[row],
-                deck: Some(0),
+                deck: None,
             });
         }
         if response.secondary_clicked() {
@@ -1344,7 +1350,7 @@ impl Browser {
     /// view; Return or Shift+Left loads the highlighted track to Player A.
     /// Ignored while a text field has focus.
     fn keyboard(&mut self, ui: &Ui, view_height: f32, row_h: f32) -> Option<BrowserAction> {
-        if self.rows.is_empty() || ui.ctx().memory(|m| m.focused().is_some()) {
+        if self.rows.is_empty() || self.typing || ui.ctx().memory(|m| m.focused().is_some()) {
             return None;
         }
         use egui::Key;

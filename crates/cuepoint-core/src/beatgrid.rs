@@ -179,16 +179,19 @@ impl BeatGrid {
     /// Each beat lengthened by `seconds` (negative shortens), keeping the
     /// first marker in place: the grid widens or narrows.
     pub fn stretched(&self, seconds: f64) -> Self {
-        let Some(first) = self.markers.first().copied() else {
-            return self.clone();
-        };
-        let beat = |bpm: f64| 60.0 / bpm;
-        let scale = (beat(first.bpm) + seconds) / beat(first.bpm);
-        self.map_markers(|m| TempoMarker {
-            time: first.time + (m.time - first.time) * scale,
-            bpm: 60.0 / (beat(m.bpm) + seconds),
-            ..m
-        })
+        // Each marker moves by `seconds` per beat before it, so every
+        // segment keeps its whole number of beats whatever its tempo.
+        let markers = self
+            .markers
+            .iter()
+            .zip(&self.bases)
+            .map(|(m, &base)| TempoMarker {
+                time: m.time + base * seconds,
+                bpm: 60.0 / (60.0 / m.bpm + seconds),
+                ..*m
+            })
+            .collect();
+        Self::from_markers(markers)
     }
 
     /// A constant grid at `bpm` that keeps this grid's first beat.
@@ -222,6 +225,27 @@ mod tests {
             (0.25, 126.0)
         );
         assert!(BeatGrid::default().shifted(1.0).is_empty());
+    }
+
+    #[test]
+    fn stretching_keeps_whole_beats_across_tempos() {
+        // 16 beats at 120 BPM, 8 at 60 BPM, then a final marker.
+        let grid = BeatGrid::from_markers(
+            [(0.0, 120.0), (8.0, 60.0), (16.0, 60.0)]
+                .map(|(time, bpm)| TempoMarker {
+                    time,
+                    bpm,
+                    beat_in_bar: 1,
+                })
+                .to_vec(),
+        );
+        let wide = grid.stretched(0.0005);
+        let times: Vec<f64> = wide.markers().iter().map(|m| m.time).collect();
+        assert!((times[1] - (8.0 + 16.0 * 0.0005)).abs() < 1e-9);
+        assert!((times[2] - (16.0 + 24.0 * 0.0005)).abs() < 1e-9);
+        // No beat is inserted: marker beats and downbeats stay put.
+        assert_eq!(wide.beat_at(times[2]), Some(24.0));
+        assert!(wide.is_downbeat(24));
     }
 
     #[test]

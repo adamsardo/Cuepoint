@@ -209,7 +209,12 @@ impl CuepointApp {
                 let Some(track) = self.library.tracks().get(track).cloned() else {
                     return;
                 };
-                let Some(deck) = deck.or_else(|| self.player.free_deck()) else {
+                // Export mode shows only Player A, so that is the free deck.
+                let free = match self.mode {
+                    Mode::Export => Some(0),
+                    Mode::Performance => self.player.free_deck(),
+                };
+                let Some(deck) = deck.or(free) else {
                     self.status = Status::Error("Both decks are playing.".into());
                     return;
                 };
@@ -332,8 +337,13 @@ impl eframe::App for CuepointApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let frame_started = std::time::Instant::now();
         self.draw(ui);
-        if std::env::var_os("CUEPOINT_DEV_TIMING").is_some() && frame_started.elapsed().as_millis() > 8 {
-            eprintln!("[timing] frame built in {:.1} ms", frame_started.elapsed().as_secs_f64() * 1e3);
+        if std::env::var_os("CUEPOINT_DEV_TIMING").is_some()
+            && frame_started.elapsed().as_millis() > 8
+        {
+            eprintln!(
+                "[timing] frame built in {:.1} ms",
+                frame_started.elapsed().as_secs_f64() * 1e3
+            );
         }
     }
 }

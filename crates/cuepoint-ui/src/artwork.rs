@@ -36,7 +36,8 @@ impl ArtworkCache {
             .name("cuepoint-artwork".into())
             .spawn(move || {
                 for path in jobs {
-                    let image = thumbnail(&path);
+                    // One bad file must not stop artwork for the rest.
+                    let image = std::panic::catch_unwind(|| thumbnail(&path)).ok().flatten();
                     if done.send((path, image)).is_err() {
                         break;
                     }
