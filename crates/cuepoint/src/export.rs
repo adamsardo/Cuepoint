@@ -146,9 +146,13 @@ fn prepare(track: &Track) -> Result<PreparedTrack, String> {
         year: track.year.unwrap_or(0),
         rating: track.rating.stars(),
         colour: colour_index(track),
-        sample_rate: track.sample_rate.unwrap_or(ANALYSIS_RATE),
+        sample_rate: track.sample_rate.unwrap_or(pcm.source_sample_rate()),
         bit_rate_kbps: track.bit_rate.unwrap_or(0),
-        bit_depth: 16,
+        // Lossy formats have no bit depth of their own; 16 is assumed.
+        bit_depth: pcm
+            .source_bits_per_sample()
+            .and_then(|bits| u16::try_from(bits).ok())
+            .unwrap_or(16),
         file_type: FileType::from_extension(extension),
         date_added: track.date_added.clone(),
         ..ExportTrack::default()

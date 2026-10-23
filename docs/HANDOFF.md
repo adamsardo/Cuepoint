@@ -10,9 +10,9 @@ Cuepoint is a clean-room, pure-Rust rekordbox 7.2.19 rewrite. The plan is in `do
 | M1 Library reader (rekordbox XML, master.db via SQLCipher, egui browser) | Merged ([adamsardo/Cuepoint#3](https://github.com/adamsardo/Cuepoint/pull/3)) |
 | M2 Two-deck playback (engine, CDJ cue, loops, mixer, no-alloc audio thread) | Merged ([adamsardo/Cuepoint#4](https://github.com/adamsardo/Cuepoint/pull/4)) |
 | M3 Analysis (BPM/grid, key, colour waveform, loudness) and beat sync | Merged ([adamsardo/Cuepoint#5](https://github.com/adamsardo/Cuepoint/pull/5)) |
-| M4 USB export (export.pdb, ANLZ .DAT/.EXT, Export menu, `cuepoint export` command) | In review: [adamsardo/Cuepoint#6](https://github.com/adamsardo/Cuepoint/pull/6), branch `claude/sweet-lovelace-aobomc`. All 3 Codex findings are fixed (`75e74ba`); Codex is re-reviewing |
+| M4 USB export (export.pdb, ANLZ .DAT/.EXT, Export menu, `cuepoint export` command) | In review: [adamsardo/Cuepoint#6](https://github.com/adamsardo/Cuepoint/pull/6), branch `claude/sweet-lovelace-aobomc`. Both Codex rounds are fixed (3 findings in `75e74ba`, then 3 more); Codex is re-reviewing |
 
-All 102 tests pass. `cargo clippy --all-targets` and `cargo fmt --check` are clean.
+All 105 tests pass (1 ignored). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean on the pinned toolchain.
 
 ## Next steps
 
@@ -25,6 +25,8 @@ All 102 tests pass. `cargo clippy --all-targets` and `cargo fmt --check` are cle
 - **OneLibrary (`exportLibrary.db`):** SQLCipher-encrypted. Plan: the user supplies the key, as for `master.db`.
 - **Export behaviour:**
   - Re-export keeps audio already on the stick only when the bytes match.
+  - Every file (audio, ANLZ, `export.pdb`) is written to `.cuepoint-N.tmp` first and moved into place only after the whole export is ready. A cancelled or failed export leaves the previous export as it was. Replaced files are set aside and restored if a move fails. Replaced audio therefore needs free space twice over until the export finishes.
+  - Bit depth comes from the source file (WAV/AIFF/FLAC/ALAC). Lossy formats are written as 16, an assumption that hasn't been checked against rekordbox.
   - Device paths are capped at 255 UTF-16 units: artist and album folders at 64 each, and the file name is trimmed to fit.
 - **Export gaps:** cues (written as empty lists), artwork, PSSI phrases, PQT2, PVBR seek data, `exportExt.pdb`.
 - **Placeholder values:** mixer EQ and fader curves are generic DJ-mixer values, not rekordbox's. There is no key lock (needs the time-stretcher).
@@ -39,6 +41,7 @@ All 102 tests pass. `cargo clippy --all-targets` and `cargo fmt --check` are cle
 ## Environment
 
 - **Build:** `cargo test` / `cargo run -p cuepoint -- examples/demo-library.xml`. On Linux, building needs `libasound2-dev`.
+- **Toolchain:** `rust-toolchain.toml` pins Rust 1.99.1, and rustup installs it on first use. egui 0.37 needs at least 1.95.
 - **Reverse engineering:** `scripts/setup-env.sh` downloads rekordbox and Ghidra to `/opt`. `scripts/extract-symbols.sh` rebuilds the symbol index outside the repo. REA setup: `npx -y rea-agents@6.7.0 setup --client claude_code --dry-run`. A full Ghidra pass on the arm64 slice needs a heap of about 8 GB and roughly an hour, and REA doesn't keep the analysed database between runs.
 - **Clean-room rule:** no AlphaTheta code, weights, artwork, mapping files or keys in the repo.
 - **Test-only dependency:** `rekordcrate` (MPL-2.0) is a dev-dependency for checking export output. It is never shipped.

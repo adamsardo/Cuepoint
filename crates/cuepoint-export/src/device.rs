@@ -54,13 +54,17 @@ pub enum Progress {
 pub struct ExportReport {
     pub tracks: usize,
     pub playlists: usize,
-    /// Audio files skipped because an identical-size file was already there.
+    /// Audio files skipped because an identical file was already there.
     pub already_present: usize,
 }
 
 /// Writes `tracks` and `playlists` (whose entries refer to positions in
-/// `tracks`, 1-based) under `root`. Existing audio files of the same size
-/// are kept, so re-exporting is fast. `progress` may return false to cancel.
+/// `tracks`, 1-based) under `root`. Existing identical audio files are
+/// kept, so re-exporting is fast. `progress` may return false to cancel.
+///
+/// Every file is written under a temporary name first and moved into place
+/// only once the whole export is ready, so a cancelled or failed export
+/// leaves the previous `export.pdb` and the files it refers to untouched.
 pub fn write_device(
     root: &Path,
     mut tracks: Vec<PreparedTrack>,
@@ -75,6 +79,7 @@ pub fn write_device(
     let library_dir = pioneer.join("rekordbox");
     fs::create_dir_all(&library_dir).map_err(io_error(&library_dir))?;
 
+    let mut staging = Staging::default();
     let mut used_paths = HashSet::new();
     let mut used_analysis = HashSet::new();
     let total = tracks.len();
@@ -100,7 +105,9 @@ pub fn write_device(
         if same {
             already_present += 1;
         } else {
-            copy_atomically(&track.source, &audio_dest).map_err(io_error(&audio_dest))?;
+            staging
+                .copy(&track.source, &audio_dest)
+                .map_err(io_error(&audio_dest))?;
         }
         track.row.file_size = source_len;
 
@@ -115,8 +122,12 @@ pub fn write_device(
         if let Some(parent) = dat.parent() {
             fs::create_dir_all(parent).map_err(io_error(parent))?;
         }
-        write_atomically(&dat, &anlz::write_dat(&input)).map_err(io_error(&dat))?;
-        write_atomically(&ext, &anlz::write_ext(&input)).map_err(io_error(&ext))?;
+        staging
+            .write(&dat, &anlz::write_dat(&input))
+            .map_err(io_error(&dat))?;
+        staging
+            .write(&ext, &anlz::write_ext(&input))
+            .map_err(io_error(&ext))?;
     }
 
     if !progress(Progress::WritingLibrary) {
@@ -127,7 +138,12 @@ pub fn write_device(
         playlists,
     };
     let pdb_path = library_dir.join("export.pdb");
-    write_atomically(&pdb_path, &pdb::write_pdb(&library)).map_err(io_error(&pdb_path))?;
+    staging
+        .write(&pdb_path, &pdb::write_pdb(&library))
+        .map_err(io_error(&pdb_path))?;
+    staging
+        .commit()
+        .map_err(|(path, source)| ExportError::Io { path, source })?;
     Ok(ExportReport {
         tracks: library.tracks.len(),
         playlists: library.playlists.len(),
@@ -261,18 +277,87 @@ fn on_device(root: &Path, device_path: &str) -> PathBuf {
         .fold(root.to_owned(), |path, part| path.join(part))
 }
 
-/// Writes via a temporary file and rename, so a pulled drive never holds a
-/// half-written file under the real name.
-fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let temp = path.with_extension("cuepoint-tmp");
-    fs::write(&temp, bytes)?;
-    fs::rename(&temp, path)
+/// Files written under temporary names beside their destinations, waiting
+/// to be moved into place together. Dropping it without committing deletes
+/// the temporary files.
+#[derive(Default)]
+struct Staging {
+    /// (temporary, destination) pairs, in the order they were written.
+    staged: Vec<(PathBuf, PathBuf)>,
 }
 
-fn copy_atomically(from: &Path, to: &Path) -> io::Result<()> {
-    let temp = to.with_extension("cuepoint-tmp");
-    fs::copy(from, &temp)?;
-    fs::rename(&temp, to)
+impl Staging {
+    /// A short temporary name beside `dest`, so it fits wherever `dest` does.
+    fn temp_for(&mut self, dest: &Path) -> PathBuf {
+        let temp = dest.with_file_name(format!(".cuepoint-{}.tmp", self.staged.len() + 1));
+        self.staged.push((temp.clone(), dest.to_owned()));
+        temp
+    }
+
+    fn write(&mut self, dest: &Path, bytes: &[u8]) -> io::Result<()> {
+        fs::write(self.temp_for(dest), bytes)
+    }
+
+    fn copy(&mut self, from: &Path, dest: &Path) -> io::Result<()> {
+        fs::copy(from, self.temp_for(dest)).map(drop)
+    }
+
+    /// Moves every staged file into place, in order. A file being replaced
+    /// is set aside first; if any move fails, everything moved so far is
+    /// put back as it was.
+    fn commit(mut self) -> Result<(), (PathBuf, io::Error)> {
+        let staged = std::mem::take(&mut self.staged);
+        // (destination, where its previous file was set aside)
+        let mut moved: Vec<(&Path, Option<PathBuf>)> = Vec::new();
+        let mut result = Ok(());
+        for (temp, dest) in &staged {
+            let set_aside = match fs::symlink_metadata(dest) {
+                Ok(_) => {
+                    let old = temp.with_extension("old");
+                    match fs::rename(dest, &old) {
+                        Ok(()) => Some(old),
+                        Err(e) => {
+                            result = Err((dest.clone(), e));
+                            break;
+                        }
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+                Err(e) => {
+                    result = Err((dest.clone(), e));
+                    break;
+                }
+            };
+            moved.push((dest, set_aside));
+            if let Err(e) = fs::rename(temp, dest) {
+                result = Err((dest.clone(), e));
+                break;
+            }
+        }
+        if result.is_err() {
+            for (dest, set_aside) in moved.iter().rev() {
+                let _ = match set_aside {
+                    Some(old) => fs::rename(old, dest),
+                    None => fs::remove_file(dest),
+                };
+            }
+        } else {
+            for old in moved.into_iter().filter_map(|(_, old)| old) {
+                let _ = fs::remove_file(old);
+            }
+        }
+        // Whatever was not moved into place is removed.
+        self.staged = staged;
+        result
+    }
+}
+
+impl Drop for Staging {
+    fn drop(&mut self) {
+        for (temp, _) in &self.staged {
+            let _ = fs::remove_file(temp);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -325,6 +410,49 @@ mod tests {
         }
         assert!(second.ends_with(" (2).flac"));
         assert_ne!(first.to_lowercase(), second.to_lowercase());
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("cuepoint-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn staged_names_fit_beside_the_longest_destination() {
+        let dir = temp_dir("staging-long");
+        let source = dir.join("source.mp3");
+        fs::write(&source, b"audio").unwrap();
+        // 253 bytes: valid, but too long once given a longer extension.
+        let dest = dir.join(format!("{}.mp3", "曲".repeat(83)));
+        let mut staging = Staging::default();
+        staging.copy(&source, &dest).unwrap();
+        staging.commit().unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), b"audio");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 2, "no leftovers");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_commit_puts_replaced_files_back() {
+        let dir = temp_dir("staging-rollback");
+        let (kept, added) = (dir.join("kept"), dir.join("sub").join("added"));
+        fs::write(&kept, b"old").unwrap();
+        fs::create_dir_all(added.parent().unwrap()).unwrap();
+        let mut staging = Staging::default();
+        staging.write(&kept, b"new").unwrap();
+        staging.write(&added, b"new").unwrap();
+        // The second move fails because its folder has gone.
+        fs::remove_dir_all(added.parent().unwrap()).unwrap();
+        assert!(staging.commit().is_err());
+        assert_eq!(fs::read(&kept).unwrap(), b"old");
+        let names: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["kept"], "temporary and set-aside files removed");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

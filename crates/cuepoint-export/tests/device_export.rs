@@ -168,6 +168,50 @@ fn exported_device_reads_back_with_rekordcrate() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Every file under `dir`, with its contents.
+fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files = Vec::new();
+    let mut pending = vec![dir.to_owned()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                files.push((path, bytes));
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+#[test]
+fn cancelled_re_export_leaves_the_previous_export_intact() {
+    let dir = temp_dir("cancel-reexport");
+    let root = dir.join("USB");
+    let first = vec![prepared(&dir, 1, "First", "Same Artist", 125.0)];
+    write_device(&root, first, vec![], &mut |_| true).unwrap();
+    let before = snapshot(&root);
+
+    // A different track whose audio lands on the same device path.
+    let mut other = prepared(&dir, 2, "Other", "Same Artist", 140.0);
+    let renamed = dir.join("other").join("source-1.mp3");
+    std::fs::create_dir_all(renamed.parent().unwrap()).unwrap();
+    std::fs::rename(&other.source, &renamed).unwrap();
+    other.source = renamed;
+    let result = write_device(&root, vec![other], vec![], &mut |p| {
+        p != cuepoint_export::device::Progress::WritingLibrary
+    });
+    assert!(matches!(
+        result,
+        Err(cuepoint_export::device::ExportError::Cancelled)
+    ));
+    assert_eq!(snapshot(&root), before, "old files kept, nothing left over");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn cancelling_stops_the_export() {
     let dir = temp_dir("cancel");
