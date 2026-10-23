@@ -227,6 +227,10 @@ impl Player {
         self.flush();
     }
 
+    pub fn play_pause(&mut self, deck: usize) {
+        self.handle.send(Command::PlayPause { deck });
+    }
+
     pub fn seek(&mut self, deck: usize, frame: f64) {
         self.handle.send(Command::Seek { deck, frame });
     }

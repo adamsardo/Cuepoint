@@ -410,6 +410,13 @@ impl eframe::App for CuepointApp {
         ) {
             self.browser_action(action);
         }
+        // Space plays and pauses Player A unless text is being typed.
+        if self.mode == Mode::Export
+            && ui.ctx().memory(|m| m.focused().is_none())
+            && ui.input(|i| i.key_pressed(egui::Key::Space))
+        {
+            self.player.play_pause(0);
+        }
         let footer_text = self.footer_text();
         cuepoint_ui::footer(ui, footer, &footer_text);
         let footer_response =

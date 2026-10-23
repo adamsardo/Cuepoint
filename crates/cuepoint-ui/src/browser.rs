@@ -1217,7 +1217,7 @@ impl Browser {
             pos2(thumb_right, bottom.top() + 8.0),
         );
         paint::rounded(&p, thumb, 3.0, theme::TAB_OFF);
-        action
+        self.keyboard(ui, body.height(), row_h).or(action)
     }
 }
 
@@ -1328,6 +1328,62 @@ fn draw_preview(
     }
 }
 
+impl Browser {
+    /// Arrow, page, home and end keys move the highlight and keep it in
+    /// view; Return or Shift+Left loads the highlighted track to Player A.
+    /// Ignored while a text field has focus.
+    fn keyboard(&mut self, ui: &Ui, view_height: f32, row_h: f32) -> Option<BrowserAction> {
+        if self.rows.is_empty() || ui.ctx().memory(|m| m.focused().is_some()) {
+            return None;
+        }
+        use egui::Key;
+        let page = ((view_height / row_h) as isize - 1).max(1);
+        let (step, load) = ui.input(|i| {
+            let step = if i.key_pressed(Key::ArrowDown) {
+                Some(1)
+            } else if i.key_pressed(Key::ArrowUp) {
+                Some(-1)
+            } else if i.key_pressed(Key::PageDown) {
+                Some(page)
+            } else if i.key_pressed(Key::PageUp) {
+                Some(-page)
+            } else if i.key_pressed(Key::Home) {
+                Some(isize::MIN / 2)
+            } else if i.key_pressed(Key::End) {
+                Some(isize::MAX / 2)
+            } else {
+                None
+            };
+            let load =
+                i.key_pressed(Key::Enter) || (i.modifiers.shift && i.key_pressed(Key::ArrowLeft));
+            (step, load)
+        });
+        let current = self
+            .selected
+            .and_then(|t| self.rows.iter().position(|&r| r == t));
+        if let Some(step) = step {
+            let last = self.rows.len() as isize - 1;
+            let row = match current {
+                Some(row) => (row as isize).saturating_add(step).clamp(0, last),
+                None if step < 0 => last,
+                None => 0,
+            } as usize;
+            self.selected = Some(self.rows[row]);
+            let top = row as f32 * row_h;
+            if top < self.scroll {
+                self.scroll = top;
+            } else if top + row_h > self.scroll + view_height {
+                self.scroll = top + row_h - view_height;
+            }
+        }
+        let track = current.map(|row| self.rows[row])?;
+        load.then_some(BrowserAction::Load {
+            track,
+            deck: Some(0),
+        })
+    }
+}
+
 struct TreeRow {
     depth: usize,
     kind: RowKind,
@@ -1366,5 +1422,96 @@ fn cell_text(track: &Track, column: SortColumn) -> String {
             [y, m, d] => format!("{d}/{m}/{y}"),
             _ => track.date_added.clone(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use cuepoint_core::TrackId;
+    use egui::{Event, Key, Modifiers, RawInput};
+
+    use super::*;
+
+    fn library() -> Library {
+        let tracks = (1..=3)
+            .map(|n| Track {
+                id: TrackId(n.to_string()),
+                title: format!("Track {n}"),
+                ..Track::default()
+            })
+            .collect();
+        Library::new(tracks, Vec::new())
+    }
+
+    /// Runs one frame of the browser with `keys` pressed.
+    fn frame(
+        browser: &mut Browser,
+        library: &Library,
+        keys: &[(Key, Modifiers)],
+    ) -> Option<BrowserAction> {
+        let ctx = egui::Context::default();
+        let mut artwork = ArtworkCache::new();
+        let mut previews = PreviewCache::new(Arc::new(|_: &std::path::Path| None), None, 1);
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1512.0, 600.0));
+        let mut action = None;
+        // A first frame lays the list out; the second carries the keys.
+        for events in [Vec::new(), keys.to_vec()] {
+            let modifiers = events.iter().fold(Modifiers::NONE, |all, (_, m)| all | *m);
+            let input = RawInput {
+                screen_rect: Some(screen),
+                events: std::iter::once(Event::ModifiersChanged(modifiers))
+                    .chain(events.into_iter().map(|(key, modifiers)| Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }))
+                    .collect(),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                action = browser.show(ui, screen, library, None, &mut artwork, &mut previews);
+            });
+            output.textures_delta.clear();
+        }
+        action
+    }
+
+    #[test]
+    fn arrow_keys_move_the_highlight_and_return_loads() {
+        let library = library();
+        let mut browser = Browser::default();
+        assert_eq!(
+            frame(&mut browser, &library, &[(Key::ArrowDown, Modifiers::NONE)]),
+            None
+        );
+        assert_eq!(browser.selected, Some(0));
+        frame(&mut browser, &library, &[(Key::End, Modifiers::NONE)]);
+        assert_eq!(browser.selected, Some(2));
+        frame(&mut browser, &library, &[(Key::ArrowUp, Modifiers::NONE)]);
+        assert_eq!(browser.selected, Some(1));
+        let load = frame(&mut browser, &library, &[(Key::Enter, Modifiers::NONE)]);
+        assert_eq!(
+            load,
+            Some(BrowserAction::Load {
+                track: 1,
+                deck: Some(0)
+            })
+        );
+        let load = frame(
+            &mut browser,
+            &library,
+            &[(Key::ArrowLeft, Modifiers::SHIFT)],
+        );
+        assert_eq!(
+            load,
+            Some(BrowserAction::Load {
+                track: 1,
+                deck: Some(0)
+            })
+        );
     }
 }
