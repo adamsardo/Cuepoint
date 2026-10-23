@@ -11,13 +11,29 @@ Cuepoint is a clean-room, pure-Rust rekordbox 7.2.19 rewrite. The plan is in `do
 | M2 Two-deck playback (engine, CDJ cue, loops, mixer, no-alloc audio thread) | Merged ([adamsardo/Cuepoint#4](https://github.com/adamsardo/Cuepoint/pull/4)) |
 | M3 Analysis (BPM/grid, key, colour waveform, loudness) and beat sync | Merged ([adamsardo/Cuepoint#5](https://github.com/adamsardo/Cuepoint/pull/5)) |
 | M4 USB export (export.pdb, ANLZ .DAT/.EXT, Export menu, `cuepoint export` command) | Merged ([adamsardo/Cuepoint#6](https://github.com/adamsardo/Cuepoint/pull/6)) after three Codex review rounds (six findings fixed, final round clean) |
+| Export-screen UI parity (rekordbox's Export mode, one-to-one) | Branch `claude/export-ui-parity`, not yet a PR |
 
-All 105 tests pass (1 ignored). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean on the pinned toolchain.
+All 111 tests pass (1 ignored). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean on the pinned toolchain.
+
+## Focus
+
+Hardware work is on hold (no CDJ or controller to test with). Work on library management, track analysis and preparation, up to USB export. Visual parity with rekordbox comes first.
 
 ## Next steps
 
-1. Hardware check: run `cargo run --release -p cuepoint -- export your.xml /Volumes/STICK` and load the stick on a CDJ.
-2. Milestone 5, Performance mode: 4 decks, FX families, sampler/sequencer, MIDI controllers (spec 03 and 06).
+1. Review and open a PR for `claude/export-ui-parity`.
+2. UI states that need the user present (full-screen control approval): the track-list and tree right-click menus, the EXPORT mode and layout dropdowns, and Preferences. rekordbox draws its own menus; Cuepoint still uses egui's.
+3. Library editing with write-back: playlist create/rename/delete, adding tracks by drag, cue and grid edits saved (grid edits currently live only until the track is reloaded).
+4. Background analysis of the whole collection (grid, key and waveform cached like the previews), and reading `djmdCue` from `master.db`.
+5. Hardware and Performance mode (Milestone 5) when hardware is available.
+
+## UI parity method
+
+- Capture both windows at 2x with `screencapture -l <window id>`, crop matching regions, and compare text boxes and colour runs. The measured positions are in comments in `crates/cuepoint-ui/src/{theme,export_view,browser}.rs`.
+- `CUEPOINT_DEV_PLAYLIST`, `CUEPOINT_DEV_LOAD`, `CUEPOINT_DEV_SEEK` and `CUEPOINT_DEV_TAB` (`grid`, `info`, `memory`, `artwork`) preload a state so it matches a rekordbox capture.
+- Arial is loaded from macOS at runtime (nothing bundled). The title bar and traffic lights are drawn by the app, at rekordbox's 28 pt and 12 pt sizes.
+- The 3-band waveform analysis was fitted to rekordbox's `PWV7` detail data (see `crates/cuepoint-analysis/src/waveform.rs`); the overview and list previews use measured band-height ratios.
+- Previews are cached in `~/Library/Caches/Cuepoint/previews`.
 
 ## Open items
 
@@ -27,7 +43,8 @@ All 105 tests pass (1 ignored). `cargo clippy --all-targets -- -D warnings` and 
   - Every file (audio, ANLZ, `export.pdb`) is written to `.cuepoint-N.tmp` first and moved into place only after the whole export is ready. A cancelled or failed export leaves the previous export as it was. Replaced files are set aside and restored if a move fails. Replaced audio therefore needs free space twice over until the export finishes.
   - Bit depth comes from the source file (WAV/AIFF/FLAC/ALAC). Lossy formats are written as 16, an assumption that hasn't been checked against rekordbox.
   - Device paths are capped at 255 UTF-16 units: artist and album folders at 64 each, and the file name is trimmed to fit.
-- **Export gaps:** cues (written as empty lists), artwork, PSSI phrases, PQT2, PVBR seek data, `exportExt.pdb`.
+- **Export gaps:** cues (written as empty lists, though XML cues are now read), artwork, PSSI phrases, PQT2, PVBR seek data, `exportExt.pdb`.
+- **UI gaps:** phrase edit, the analysis lock, the third and fourth list-layout buttons, the source rail's other panels (Explorer, devices, history), streaming-service icons (drawn as plain glyphs, not brand logos), and column resizing.
 - **Placeholder values:** mixer EQ and fader curves are generic DJ-mixer values, not rekordbox's. There is no key lock (needs the time-stretcher).
 - **Sync scope:** beat sync only, not bar sync. Analysis is DSP; the ML models are Milestone 7.
 - **Decided:**
