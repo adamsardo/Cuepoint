@@ -161,7 +161,8 @@ fn prepare(track: &Track) -> Result<PreparedTrack, String> {
         row,
         source,
         grid,
-        waveform: analysis.waveform,
+        // The ANLZ encoders take plain peaks, not the on-screen envelopes.
+        waveform: cuepoint_analysis::peak_waveform(pcm.samples(), ANALYSIS_RATE),
         duration_secs: pcm.duration_secs(),
     })
 }

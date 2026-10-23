@@ -103,6 +103,8 @@ fn read_tracks(conn: &Connection) -> Result<Vec<Track>> {
             // master.db keeps grids in the ANLZ files under AnalysisDataPath,
             // not in the database; reading those comes with device export.
             beatgrid: Default::default(),
+            // djmdCue is not read yet.
+            cues: Vec::new(),
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)

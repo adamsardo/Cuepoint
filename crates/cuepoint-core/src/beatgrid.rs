@@ -8,6 +8,9 @@
 /// Beats per bar. rekordbox grids are always 4/4.
 pub const BEATS_PER_BAR: u32 = 4;
 
+/// Tempos a grid edit may produce, as rekordbox allows.
+pub const EDIT_BPM_RANGE: std::ops::RangeInclusive<f64> = 20.0..=999.0;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TempoMarker {
     /// Time of this marker's beat, seconds from the start of the track.
@@ -121,6 +124,12 @@ impl BeatGrid {
         Some(marker.time + local * 60.0 / marker.bpm)
     }
 
+    /// Whether the grid has markers and every tempo is in [`EDIT_BPM_RANGE`],
+    /// so an edit that produced it can be applied.
+    pub fn tempos_in_edit_range(&self) -> bool {
+        !self.is_empty() && self.markers.iter().all(|m| EDIT_BPM_RANGE.contains(&m.bpm))
+    }
+
     pub fn bpm_at(&self, time: f64) -> Option<f64> {
         self.markers.get(self.segment(time)).map(|m| m.bpm)
     }
@@ -144,6 +153,47 @@ impl BeatGrid {
         Some((since_marker + i64::from(marker.beat_in_bar) - 1).rem_euclid(bar) as u32 + 1)
     }
 
+    /// Bar number of whole beat `beat`: the bar holding the grid's first
+    /// downbeat at or after beat 0 is 1, bars before it count down from 0.
+    /// Bars follow [`Self::beat_in_bar`], so a marker that restarts the bar
+    /// count starts a new bar.
+    pub fn bar_number(&self, beat: i64) -> Option<i64> {
+        let last = *self.bases.last()? as i64;
+        let first = (0..=last + i64::from(BEATS_PER_BAR)).find(|&b| self.is_downbeat(b))?;
+        Some(if beat >= first {
+            1 + self.downbeats_in(first + 1, beat)
+        } else {
+            1 - self.downbeats_in(beat + 1, first)
+        })
+    }
+
+    /// How many whole beats in `lo..=hi` are downbeats.
+    fn downbeats_in(&self, lo: i64, hi: i64) -> i64 {
+        let bar = i64::from(BEATS_PER_BAR);
+        (0..self.markers.len())
+            .map(|i| {
+                // Segment i's whole beats; the first and last segments run
+                // on without end.
+                let start = if i == 0 {
+                    i64::MIN / 4
+                } else {
+                    self.bases[i] as i64
+                };
+                let end = self
+                    .bases
+                    .get(i + 1)
+                    .map_or(i64::MAX / 4, |&b| b as i64 - 1);
+                let (lo, hi) = (lo.max(start), hi.min(end));
+                if hi < lo {
+                    return 0;
+                }
+                // Downbeats are the beats congruent to `r` modulo a bar.
+                let r = self.bases[i] as i64 - i64::from(self.markers[i].beat_in_bar) + 1;
+                (hi - r).div_euclid(bar) - (lo - 1 - r).div_euclid(bar)
+            })
+            .sum()
+    }
+
     /// Times of every whole beat in `start..end` seconds, with a downbeat
     /// flag, for drawing grid lines.
     pub fn beats_between(&self, start: f64, end: f64) -> Vec<(f64, bool)> {
@@ -156,9 +206,107 @@ impl BeatGrid {
     }
 }
 
+/// Grid edits, as the GRID EDIT panel applies them. Each returns a new
+/// grid and leaves an empty grid empty.
+impl BeatGrid {
+    /// Every marker moved by `seconds` (positive is later).
+    pub fn shifted(&self, seconds: f64) -> Self {
+        self.map_markers(|m| TempoMarker {
+            time: m.time + seconds,
+            ..m
+        })
+    }
+
+    /// Every tempo multiplied by `factor` (2.0 doubles, 0.5 halves); the
+    /// markers stay where they are.
+    pub fn tempo_scaled(&self, factor: f64) -> Self {
+        self.map_markers(|m| TempoMarker {
+            bpm: m.bpm * factor,
+            ..m
+        })
+    }
+
+    /// Each beat lengthened by `seconds` (negative shortens), keeping the
+    /// first marker in place: the grid widens or narrows. Unchanged if that
+    /// would make any beat zero or negative in length.
+    pub fn stretched(&self, seconds: f64) -> Self {
+        if self.markers.iter().any(|m| 60.0 / m.bpm + seconds <= 0.0) {
+            return self.clone();
+        }
+        // Each marker moves by `seconds` per beat before it, so every
+        // segment keeps its whole number of beats whatever its tempo.
+        let markers = self
+            .markers
+            .iter()
+            .zip(&self.bases)
+            .map(|(m, &base)| TempoMarker {
+                time: m.time + base * seconds,
+                bpm: 60.0 / (60.0 / m.bpm + seconds),
+                ..*m
+            })
+            .collect();
+        Self::from_markers(markers)
+    }
+
+    /// A constant grid at `bpm` that keeps this grid's first beat.
+    pub fn with_constant_tempo(&self, bpm: f64) -> Self {
+        match self.markers.first() {
+            Some(first) if bpm > 0.0 => Self::constant(bpm, first.time, first.beat_in_bar),
+            _ => self.clone(),
+        }
+    }
+
+    fn map_markers(&self, f: impl Fn(TempoMarker) -> TempoMarker) -> Self {
+        Self::from_markers(self.markers.iter().copied().map(f).collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grid_edits() {
+        let grid = BeatGrid::constant(120.0, 0.25, 1);
+        assert_eq!(grid.shifted(0.01).markers()[0].time, 0.26);
+        assert_eq!(grid.tempo_scaled(2.0).markers()[0].bpm, 240.0);
+        let wide = grid.stretched(0.01);
+        assert!((wide.markers()[0].bpm - 60.0 / 0.51).abs() < 1e-9);
+        assert_eq!(wide.markers()[0].time, 0.25);
+        let tapped = grid.with_constant_tempo(126.0);
+        assert_eq!(
+            (tapped.markers()[0].time, tapped.markers()[0].bpm),
+            (0.25, 126.0)
+        );
+        assert!(BeatGrid::default().shifted(1.0).is_empty());
+        // Edits past the tempo range are flagged; a stretch that would
+        // make a beat zero-length does nothing.
+        assert!(grid.tempos_in_edit_range());
+        assert!(!grid.tempo_scaled(16.0).tempos_in_edit_range());
+        assert!(!grid.tempo_scaled(1.0 / 16.0).tempos_in_edit_range());
+        assert_eq!(grid.stretched(-0.5), grid);
+    }
+
+    #[test]
+    fn stretching_keeps_whole_beats_across_tempos() {
+        // 16 beats at 120 BPM, 8 at 60 BPM, then a final marker.
+        let grid = BeatGrid::from_markers(
+            [(0.0, 120.0), (8.0, 60.0), (16.0, 60.0)]
+                .map(|(time, bpm)| TempoMarker {
+                    time,
+                    bpm,
+                    beat_in_bar: 1,
+                })
+                .to_vec(),
+        );
+        let wide = grid.stretched(0.0005);
+        let times: Vec<f64> = wide.markers().iter().map(|m| m.time).collect();
+        assert!((times[1] - (8.0 + 16.0 * 0.0005)).abs() < 1e-9);
+        assert!((times[2] - (16.0 + 24.0 * 0.0005)).abs() < 1e-9);
+        // No beat is inserted: marker beats and downbeats stay put.
+        assert_eq!(wide.beat_at(times[2]), Some(24.0));
+        assert!(wide.is_downbeat(24));
+    }
 
     #[test]
     fn constant_grid_maps_time_and_beats() {
@@ -248,6 +396,14 @@ mod tests {
             Some(3),
             "marker keeps its own bar position"
         );
+        // Bars follow the bar positions: beats 21 and 22 finish bar 6,
+        // and the downbeat at 23 starts bar 7.
+        let bars: Vec<(i64, u32)> = (19..=24)
+            .map(|b| (grid.bar_number(b).unwrap(), grid.beat_in_bar(b).unwrap()))
+            .collect();
+        assert_eq!(bars, [(5, 4), (6, 1), (6, 3), (6, 4), (7, 1), (7, 2)]);
+        assert_eq!(grid.bar_number(-1), Some(0));
+        assert_eq!(grid.bar_number(-5), Some(-1));
         // Positions stay monotonic through the shortened beat.
         assert!(grid.beat_at(10.05).unwrap() > 20.0 && grid.beat_at(10.05).unwrap() < 21.0);
     }

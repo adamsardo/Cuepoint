@@ -12,6 +12,7 @@ cuepoint-engine = { path = "../cuepoint-engine", default-features = false }
 cuepoint-library = { path = "../cuepoint-library", default-features = false }
 egui = "0.37"
 egui_extras = "0.37"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [lints]
 workspace = true

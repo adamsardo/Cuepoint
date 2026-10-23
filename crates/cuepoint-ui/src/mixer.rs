@@ -38,6 +38,12 @@ impl Default for MixerView {
 }
 
 impl MixerView {
+    /// True while a meter is still falling back, so the UI must keep
+    /// redrawing for the fall to look smooth.
+    pub fn is_settling(&self) -> bool {
+        self.meter_db.iter().any(|&db| db > METER_FLOOR_DB)
+    }
+
     pub fn show(&mut self, ui: &mut Ui, state: &MixerState, commands: &mut Vec<Command>) {
         let dt = ui.input(|i| i.stable_dt).min(0.1);
         for (shown, &peak) in self.meter_db.iter_mut().zip(&state.channel_peak) {
