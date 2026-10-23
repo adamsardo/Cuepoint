@@ -88,7 +88,13 @@ fn with_input<T>(f: impl FnOnce(&AnalysisInput) -> T) -> T {
 
 fn path_of(section: &Section) -> String {
     assert_eq!(section.header_word(0) as usize, section.content.len());
-    let units: Vec<u16> = section.content.chunks_exact(2).map(be16).collect();
+    let units: Vec<u16> = section
+        .content
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|unit| be16(unit))
+        .collect();
     assert_eq!(units.last(), Some(&0), "trailing NUL");
     String::from_utf16(&units[..units.len() - 1]).unwrap()
 }
@@ -152,7 +158,7 @@ fn beat_grid_matches_grid() {
     let expected = ((DURATION - FIRST_BEAT) / beat_len).floor() as usize + 1;
     assert_eq!(count, expected);
     assert_eq!(count, 64);
-    for (k, beat) in grid.content.chunks_exact(8).enumerate() {
+    for (k, beat) in grid.content.as_chunks::<8>().0.iter().enumerate() {
         assert_eq!(be16(beat), (k % 4) as u16 + 1, "beat {k} in bar");
         assert_eq!(be16(&beat[2..]), 12_800, "beat {k} tempo");
         let ms = ((FIRST_BEAT + k as f64 * beat_len) * 1000.0).round() as u32;
@@ -204,7 +210,7 @@ fn waveforms_follow_the_input() {
 
     // PWV5 heights track the loudest band, and colour sits in bits 15 to 7.
     let (_, colour) = entries(find(&ext_sections, "PWV5"), 2);
-    for (i, entry) in colour.chunks_exact(2).enumerate() {
+    for (i, entry) in colour.as_chunks::<2>().0.iter().enumerate() {
         let packed = be16(entry);
         assert_eq!(packed & 0b11, 0, "unused low bits");
         let loudest = u32::from(peaks(i).loudest());

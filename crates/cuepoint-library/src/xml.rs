@@ -33,10 +33,7 @@ pub fn open(path: &Path) -> Result<Library> {
 /// rekordbox's own importer also accepts.
 fn decode_text(bytes: &[u8]) -> Result<String> {
     let utf16 = |rest: &[u8], from: fn([u8; 2]) -> u16| {
-        let units: Vec<u16> = rest
-            .chunks_exact(2)
-            .map(|pair| from([pair[0], pair[1]]))
-            .collect();
+        let units: Vec<u16> = rest.as_chunks::<2>().0.iter().copied().map(from).collect();
         String::from_utf16(&units).map_err(|_| Error::Xml("invalid UTF-16 text".into()))
     };
     match bytes {
