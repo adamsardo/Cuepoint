@@ -47,7 +47,66 @@ enum Content {
     Preview,
     Artwork,
     Text(SortColumn),
+    /// Title over artist, BPM and key (artwork view).
+    Summary,
+    Rating,
+    Empty,
 }
+
+/// The track list's two layouts, switched from the header bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ListView {
+    #[default]
+    Standard,
+    /// Taller rows with artwork, a two-line summary and ratings.
+    Artwork,
+}
+
+impl ListView {
+    fn row_height(self) -> f32 {
+        match self {
+            ListView::Standard => ROW,
+            ListView::Artwork => 30.0,
+        }
+    }
+
+    fn columns(self) -> &'static [Column] {
+        match self {
+            ListView::Standard => &COLUMNS,
+            ListView::Artwork => &ARTWORK_COLUMNS,
+        }
+    }
+}
+
+const fn column(title: &'static str, width: f32, content: Content, right_aligned: bool) -> Column {
+    Column {
+        title,
+        width,
+        content,
+        right_aligned,
+    }
+}
+
+/// The artwork view's columns, widths including the 1 pt divider.
+const ARTWORK_COLUMNS: [Column; 12] = [
+    column("", 29.0, Content::Status, false),
+    column("", 30.0, Content::Status, false),
+    column("#", 60.0, Content::Number, false),
+    column("Preview", 200.0, Content::Preview, false),
+    column("", 30.0, Content::Artwork, false),
+    column("Summary", 128.0, Content::Summary, false),
+    column("Album", 128.0, Content::Text(SortColumn::Album), false),
+    column("Genre", 128.0, Content::Text(SortColumn::Genre), false),
+    column("Rating", 90.0, Content::Rating, false),
+    column("Time", 80.0, Content::Text(SortColumn::Duration), true),
+    column(
+        "Date Added",
+        128.0,
+        Content::Text(SortColumn::DateAdded),
+        true,
+    ),
+    column("", 85.0, Content::Empty, false),
+];
 
 #[derive(Debug, Clone, Copy)]
 struct Column {
@@ -155,6 +214,7 @@ pub struct Browser {
     tree_scroll: f32,
     /// Row the context menu was opened on.
     context_row: Option<usize>,
+    view: ListView,
 }
 
 impl Default for Browser {
@@ -172,6 +232,7 @@ impl Default for Browser {
             scroll: 0.0,
             tree_scroll: 0.0,
             context_row: None,
+            view: ListView::Standard,
         }
     }
 }
@@ -183,6 +244,10 @@ impl Browser {
         self.selected = None;
         self.scroll = 0.0;
         self.generation += 1;
+    }
+
+    pub fn set_view(&mut self, view: ListView) {
+        self.view = view;
     }
 
     /// Highlights `track` (an index into `Library::tracks`).
@@ -744,12 +809,29 @@ impl Browser {
             .enumerate()
         {
             let icon = Rect::from_min_size(pos2(ix, y + 6.5), vec2(15.0, 15.0));
-            let colour = if i == 0 {
+            let active = matches!(
+                (i, self.view),
+                (0, ListView::Standard) | (1, ListView::Artwork)
+            );
+            let colour = if active {
                 theme::ACCENT
             } else {
                 theme::OUTLINE
             };
             paint::outline(&p, icon, 1.5, colour);
+            let id = ui.scope_id().with(("list_view", i));
+            if i < 2 && ui.interact(icon, id, Sense::click()).clicked() {
+                self.view = if i == 0 {
+                    ListView::Standard
+                } else {
+                    ListView::Artwork
+                };
+                // Keep the highlighted track in view, at the top.
+                let row = self
+                    .selected
+                    .and_then(|t| self.rows.iter().position(|&r| r == t));
+                self.scroll = row.map_or(0.0, |r| r as f32 * self.view.row_height());
+            }
             match i {
                 0 | 1 => paint::list_icon(&p, icon, i == 1, theme::TEXT),
                 2 => paint::columns_icon(&p, icon, 3, theme::TEXT),
@@ -822,8 +904,10 @@ impl Browser {
         paint::fill(&p, header, theme::PANEL);
         let mut cx = x;
         let mut clicked_column = None;
-        for (i, column) in COLUMNS.iter().enumerate() {
-            let last = i == COLUMNS.len() - 1;
+        let columns = self.view.columns();
+        let row_h = self.view.row_height();
+        for (i, column) in columns.iter().enumerate() {
+            let last = i == columns.len() - 1;
             let width = if last { list_right - cx } else { column.width };
             let cell =
                 Rect::from_min_size(pos2(cx, header.top()), vec2(width - 1.0, header.height()));
@@ -890,23 +974,23 @@ impl Browser {
             pos2(list_right, rect.bottom() - 12.0),
         );
         let response = ui.interact(body, ui.scope_id().with("track_rows"), Sense::click());
-        let max_scroll = (self.rows.len() as f32 * ROW - body.height()).max(0.0);
+        let max_scroll = (self.rows.len() as f32 * row_h - body.height()).max(0.0);
         if response.hovered() {
             self.scroll -= ui.input(|i| i.smooth_scroll_delta.y);
         }
         self.scroll = self.scroll.clamp(0.0, max_scroll);
         let bp = ui.painter_at(body);
         // Stripes continue below the last row.
-        let first = (self.scroll / ROW) as usize;
-        let visible = (body.height() / ROW).ceil() as usize + 1;
+        let first = (self.scroll / row_h) as usize;
+        let visible = (body.height() / row_h).ceil() as usize + 1;
         let tracks = library.tracks();
         let row_at = |pos: egui::Pos2| -> Option<usize> {
-            let index = ((pos.y - body.top() + self.scroll) / ROW) as usize;
+            let index = ((pos.y - body.top() + self.scroll) / row_h) as usize;
             (index < self.rows.len()).then_some(index)
         };
         for n in first..first + visible {
-            let top = body.top() + n as f32 * ROW - self.scroll;
-            let row_rect = Rect::from_min_size(pos2(x, top), vec2(list_right - x, ROW));
+            let top = body.top() + n as f32 * row_h - self.scroll;
+            let row_rect = Rect::from_min_size(pos2(x, top), vec2(list_right - x, row_h));
             let stripe = if n % 2 == 0 {
                 theme::ROW_EVEN
             } else {
@@ -928,23 +1012,27 @@ impl Browser {
             );
             let track = &tracks[track_index];
             let mut cx = x;
-            for (i, column) in COLUMNS.iter().enumerate() {
-                let last = i == COLUMNS.len() - 1;
+            for (i, column) in columns.iter().enumerate() {
+                let last = i == columns.len() - 1;
                 let width = if last { list_right - cx } else { column.width };
                 if !last {
                     paint::fill(
                         &bp,
-                        Rect::from_min_size(pos2(cx + width - 1.0, top), vec2(1.0, ROW)),
+                        Rect::from_min_size(pos2(cx + width - 1.0, top), vec2(1.0, row_h)),
                         theme::BLACK,
                     );
                 }
-                let cap = top + 3.0;
-                let cell_clip = Rect::from_min_size(pos2(cx, top), vec2(width - 1.0, ROW));
+                // Single-line text sits in the middle of the row.
+                let cap = top + 3.0 + (row_h - ROW) / 2.0 + if row_h > ROW { 0.5 } else { 0.0 };
+                let cell_clip = Rect::from_min_size(pos2(cx, top), vec2(width - 1.0, row_h));
                 let cp = bp.with_clip_rect(bp.clip_rect().intersect(cell_clip));
                 match column.content {
-                    Content::Status if i == 1 => {
-                        status_cell(&cp, cx, top, loaded == Some(track_index))
-                    }
+                    Content::Status if i == 1 => status_cell(
+                        &cp,
+                        cx,
+                        top + (row_h - ROW) / 2.0,
+                        loaded == Some(track_index),
+                    ),
                     Content::Preview => {
                         // The preview cell is black on dark rows.
                         if n % 2 == 0 && !selected {
@@ -953,10 +1041,54 @@ impl Browser {
                         if let Some(path) = track.location.as_deref()
                             && let Some(preview) = previews.get(path)
                         {
-                            draw_preview(&cp, cx + 30.0, cx + width - 5.0, top, preview, track);
+                            let tall = self.view == ListView::Artwork;
+                            let (left, right) = (cx + 30.0, cx + width - 5.0);
+                            draw_preview(&cp, left, right, top, preview, track, tall);
                         }
                     }
-                    Content::Status | Content::Artwork => {}
+                    Content::Status | Content::Artwork | Content::Empty => {}
+                    Content::Summary => {
+                        let title = &track.title;
+                        paint::text(
+                            &cp,
+                            cx + 6.5,
+                            top + 4.0,
+                            Align::Min,
+                            title,
+                            theme::body(),
+                            theme::TEXT,
+                        );
+                        let small = |dx: f32, w: f32, text: &str| {
+                            let font = theme::regular(9.0);
+                            paint::text_clipped(
+                                &cp,
+                                cx + dx,
+                                top + 18.0,
+                                w,
+                                Align::Min,
+                                text,
+                                font,
+                                theme::TEXT,
+                            );
+                        };
+                        small(6.5, 30.0, &track.artist);
+                        small(52.0, 40.0, &cell_text(track, SortColumn::Bpm));
+                        small(92.0, 34.0, &cell_text(track, SortColumn::Key));
+                    }
+                    Content::Rating => {
+                        for star in 0..5u8 {
+                            let c = pos2(cx + 13.5 + f32::from(star) * 16.0, top + 14.5);
+                            paint::star(&cp, c, 7.5, theme::TEXT);
+                            if star >= track.rating.stars() {
+                                let hole = if selected {
+                                    theme::ROW_SELECTED
+                                } else {
+                                    stripe
+                                };
+                                paint::star(&cp, c, 6.3, hole);
+                            }
+                        }
+                    }
                     Content::Number => {
                         paint::text(
                             &cp,
@@ -971,7 +1103,13 @@ impl Browser {
                     Content::Text(sort) => {
                         let text = cell_text(track, sort);
                         let (tx, align) = if column.right_aligned {
-                            (cx + width - 6.5, Align::Max)
+                            // Dates right-align 80 pt into their column.
+                            let right = if sort == SortColumn::DateAdded {
+                                79.5
+                            } else {
+                                width - 6.5
+                            };
+                            (cx + right, Align::Max)
                         } else {
                             (cx + 5.5, Align::Min)
                         };
@@ -984,12 +1122,18 @@ impl Browser {
         // Artwork: each cover is drawn at full column width from its row's
         // top and runs down into the rows below until the next cover, as
         // rekordbox draws it. Start a few rows up so their overflow shows.
-        let art_left = x + COLUMNS[..4].iter().map(|c| c.width).sum::<f32>();
-        let art_width = COLUMNS[4].width - 1.0;
+        let art_left = x + columns[..4].iter().map(|c| c.width).sum::<f32>();
+        let art_width = columns[4].width - 1.0;
+        // The artwork view gives each row its own square cover.
+        let overflow = if self.view == ListView::Standard {
+            5
+        } else {
+            0
+        };
         let art_clip = Rect::from_x_y_ranges(art_left..=art_left + art_width, body.y_range());
         let ap = bp.with_clip_rect(bp.clip_rect().intersect(art_clip));
-        for n in first.saturating_sub(5)..(first + visible).min(self.rows.len()) {
-            let top = body.top() + n as f32 * ROW - self.scroll;
+        for n in first.saturating_sub(overflow)..(first + visible).min(self.rows.len()) {
+            let top = body.top() + n as f32 * row_h - self.scroll;
             let Some(path) = tracks[self.rows[n]].location.as_deref() else {
                 continue;
             };
@@ -1055,7 +1199,7 @@ impl Browser {
             pos2(rect.right(), rect.bottom() - 12.0),
         );
         paint::fill(&p, track_rect, theme::BLACK);
-        let content = self.rows.len() as f32 * ROW;
+        let content = self.rows.len() as f32 * row_h;
         if content > body.height() {
             let length = (body.height() / content * track_rect.height()).max(20.0);
             let top = track_rect.top() + self.scroll / max_scroll * (track_rect.height() - length);
@@ -1135,22 +1279,28 @@ fn draw_preview(
     top: f32,
     preview: &[[u8; 3]],
     track: &Track,
+    tall: bool,
 ) {
-    let base = top + 13.0;
+    // The artwork view's 30 pt rows draw it a little over twice as tall.
+    let (base, scale, max) = if tall {
+        (top + 23.0, 2.2, 21.0)
+    } else {
+        (top + 13.0, 1.0, 11.0)
+    };
     let width = right - left;
     let bin_width = width / PREVIEW_BINS as f32;
     for (i, &[l, m, h]) in preview.iter().enumerate() {
         let x0 = paint::snap(left + i as f32 * bin_width);
         let x1 = paint::snap(left + (i + 1) as f32 * bin_width).max(x0 + 0.5);
-        let low = (0.03 * f32::from(l)).max(0.5);
-        let mid = low + 0.013 * f32::from(m) + 0.4;
-        let high = mid + 0.035 * f32::from(h) + 0.3;
+        let low = (scale * 0.03 * f32::from(l)).max(0.5);
+        let mid = low + scale * (0.013 * f32::from(m) + 0.4);
+        let high = mid + scale * (0.035 * f32::from(h) + 0.3);
         for (height, colour) in [
             (high, theme::wave::HIGH),
             (mid, theme::wave::OVERVIEW_MID),
             (low, theme::wave::OVERVIEW_LOW),
         ] {
-            let height = paint::snap(height.min(11.0));
+            let height = paint::snap(height.min(max));
             paint::fill(
                 p,
                 Rect::from_min_max(pos2(x0, base - height), pos2(x1, base)),
@@ -1164,7 +1314,8 @@ fn draw_preview(
     for cue in &track.cues {
         if let Some(letter) = cue.slot_letter() {
             let x = left + (cue.start / duration) as f32 * width;
-            let badge = Rect::from_min_size(pos2(x - 3.5, top + 1.5), vec2(7.5, 7.5));
+            let badge_top = if tall { top + 3.0 } else { top + 1.5 };
+            let badge = Rect::from_min_size(pos2(x - 3.5, badge_top), vec2(7.5, 7.5));
             paint::fill(p, badge, theme::cue_colour(cue));
             paint::text_centred(
                 p,
@@ -1210,6 +1361,10 @@ fn cell_text(track: &Track, column: SortColumn) -> String {
             .map(|d| format!("{:02}:{:02}", d.as_secs() / 60, d.as_secs() % 60))
             .unwrap_or_default(),
         SortColumn::Rating => "★".repeat(usize::from(track.rating.stars())),
-        SortColumn::DateAdded => track.date_added.clone(),
+        // rekordbox shows dates as dd/mm/yyyy.
+        SortColumn::DateAdded => match track.date_added.split('-').collect::<Vec<_>>()[..] {
+            [y, m, d] => format!("{d}/{m}/{y}"),
+            _ => track.date_added.clone(),
+        },
     }
 }

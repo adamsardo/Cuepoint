@@ -11,7 +11,7 @@ pub mod theme;
 mod waveform;
 
 pub use artwork::ArtworkCache;
-pub use browser::{Browser, BrowserAction, Source};
+pub use browser::{Browser, BrowserAction, ListView, Source};
 pub use deck::{DeckView, LoadedTrack};
 pub use export_view::{
     DIVIDER, ExportView, FOOTER, Mode, PLAYER, SideTab, TITLE_BAR, TOP_BAR, footer, title_bar,

@@ -114,12 +114,14 @@ impl CuepointApp {
     /// `CUEPOINT_DEV_PLAYLIST` opens a playlist by name, `CUEPOINT_DEV_LOAD`
     /// loads the track with that title to Player A and `CUEPOINT_DEV_SEEK`
     /// seeks it to a time in seconds once loaded; `CUEPOINT_DEV_TAB=grid`
-    /// opens the GRID tab (or `info`/`memory` the side tabs).
+    /// opens the GRID tab (or `info`/`memory` the side tabs, `artwork` the
+    /// artwork list view).
     fn apply_dev_state(&mut self) {
         match std::env::var("CUEPOINT_DEV_TAB").as_deref() {
             Ok("grid") => self.export_view.show_grid_edit(),
             Ok("info") => self.export_view.show_side_tab(cuepoint_ui::SideTab::Info),
             Ok("memory") => self.export_view.show_side_tab(cuepoint_ui::SideTab::Memory),
+            Ok("artwork") => self.browser.set_view(cuepoint_ui::ListView::Artwork),
             _ => {}
         }
         if let Ok(name) = std::env::var("CUEPOINT_DEV_PLAYLIST") {
