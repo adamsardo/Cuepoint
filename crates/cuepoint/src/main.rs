@@ -1,9 +1,11 @@
 //! Cuepoint desktop app.
 //!
 //! Usage: `cuepoint [LIBRARY]`, where LIBRARY is a rekordbox XML export or a
-//! rekordbox 6/7 `master.db`. The master.db key is read from
+//! rekordbox 6/7 `master.db`; or `cuepoint export LIBRARY DEVICE_ROOT` to
+//! export the collection to a USB/SD device without opening a window. The master.db key is read from
 //! `CUEPOINT_MASTERDB_KEY`, or asked for in the app.
 
+mod export;
 mod player;
 
 use std::path::{Path, PathBuf};
@@ -16,7 +18,17 @@ use player::Player;
 const KEY_ENV: &str = "CUEPOINT_MASTERDB_KEY";
 
 fn main() -> eframe::Result {
-    let path = std::env::args_os().nth(1).map(PathBuf::from);
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|a| a == "export") {
+        std::process::exit(match args.as_slice() {
+            [_, library, dest] => export_cli(Path::new(library), Path::new(dest)),
+            _ => {
+                eprintln!("usage: cuepoint export LIBRARY DEVICE_ROOT");
+                2
+            }
+        });
+    }
+    let path = args.first().map(PathBuf::from);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Cuepoint")
@@ -44,6 +56,12 @@ struct CuepointApp {
     browser: Browser,
     status: Status,
     key_prompt: Option<KeyPrompt>,
+    export: Option<RunningExport>,
+}
+
+struct RunningExport {
+    job: export::ExportJob,
+    status: String,
 }
 
 #[derive(Default)]
@@ -51,6 +69,7 @@ enum Status {
     #[default]
     Empty,
     Loaded,
+    Info(String),
     Error(String),
 }
 
@@ -68,6 +87,64 @@ impl CuepointApp {
             browser: Browser::default(),
             status: Status::default(),
             key_prompt: None,
+            export: None,
+        }
+    }
+
+    fn start_export(&mut self) {
+        if self.library.tracks().is_empty() || self.export.is_some() {
+            return;
+        }
+        let Some(root) = rfd::FileDialog::new()
+            .set_title("Choose the USB or SD card to export to")
+            .pick_folder()
+        else {
+            return;
+        };
+        self.export = Some(RunningExport {
+            job: export::start(&self.library, self.browser.source(), root),
+            status: "Starting export…".into(),
+        });
+    }
+
+    fn poll_export(&mut self) {
+        let Some(running) = &mut self.export else {
+            return;
+        };
+        while let Ok(update) = running.job.updates.try_recv() {
+            match update {
+                export::Update::Status(text) => running.status = text,
+                export::Update::Finished(result) => {
+                    self.status = match result {
+                        Ok(report) => Status::Info(format!(
+                            "Exported {} tracks and {} playlists ({} audio files already on the device).",
+                            report.tracks, report.playlists, report.already_present
+                        )),
+                        Err(error) => Status::Error(error),
+                    };
+                    self.export = None;
+                    return;
+                }
+            }
+        }
+    }
+
+    fn export_window(&mut self, ui: &mut egui::Ui) {
+        let Some(running) = &self.export else { return };
+        let mut cancel = false;
+        egui::Window::new("Exporting to device")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ui.ctx(), |ui| {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(&running.status);
+                });
+                cancel = ui.button("Cancel").clicked();
+            });
+        if cancel {
+            running.job.cancel();
         }
     }
 
@@ -135,6 +212,16 @@ impl CuepointApp {
                         self.open(path, std::env::var(KEY_ENV).ok());
                     }
                 }
+                ui.separator();
+                let label = match self.browser.source() {
+                    cuepoint_ui::Source::Collection => "Export collection to device…",
+                    cuepoint_ui::Source::Playlist(_) => "Export playlist to device…",
+                };
+                let enabled = !self.library.tracks().is_empty() && self.export.is_none();
+                if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                    ui.close();
+                    self.start_export();
+                }
             });
         });
     }
@@ -165,6 +252,9 @@ impl CuepointApp {
                     self.browser.row_count(),
                     from.map(|p| p.to_string()).unwrap_or_default()
                 ));
+            }
+            Status::Info(message) => {
+                ui.label(message);
             }
             Status::Error(message) => {
                 ui.colored_label(ui.visuals().error_fg_color, message);
@@ -208,6 +298,7 @@ impl CuepointApp {
 impl eframe::App for CuepointApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.player.poll_loads();
+        self.poll_export();
         let state = self.player.state();
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
@@ -227,9 +318,52 @@ impl eframe::App for CuepointApp {
             self.browser_action(action);
         }
         self.key_window(ui);
+        self.export_window(ui);
         // Keep playheads and meters moving.
         ui.ctx().request_repaint_after(Duration::from_millis(16));
     }
+}
+
+/// `cuepoint export LIBRARY DEVICE_ROOT`: exports the whole collection
+/// without opening a window. Returns the process exit code.
+fn export_cli(library: &Path, dest: &Path) -> i32 {
+    let opened = if is_xml(library) {
+        cuepoint_library::xml::open(library)
+    } else {
+        let Ok(key) = std::env::var(KEY_ENV) else {
+            eprintln!("set {KEY_ENV} to open a master.db");
+            return 2;
+        };
+        cuepoint_library::master_db::open(library, &key)
+    };
+    let library = match opened {
+        Ok(library) => library,
+        Err(error) => {
+            eprintln!("{}: {error}", library.display());
+            return 1;
+        }
+    };
+    let job = export::start(&library, &cuepoint_ui::Source::Collection, dest.to_owned());
+    for update in job.updates.iter() {
+        match update {
+            export::Update::Status(text) => eprintln!("{text}"),
+            export::Update::Finished(Ok(report)) => {
+                println!(
+                    "Exported {} tracks and {} playlists to {} ({} already present).",
+                    report.tracks,
+                    report.playlists,
+                    dest.display(),
+                    report.already_present
+                );
+                return 0;
+            }
+            export::Update::Finished(Err(error)) => {
+                eprintln!("{error}");
+                return 1;
+            }
+        }
+    }
+    1
 }
 
 fn is_xml(path: &Path) -> bool {

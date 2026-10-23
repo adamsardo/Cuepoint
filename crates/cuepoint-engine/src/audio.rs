@@ -33,6 +33,8 @@ pub enum DecodeError {
 pub struct Pcm {
     sample_rate: u32,
     samples: Box<[f32]>,
+    source_rate: u32,
+    source_bits: Option<u32>,
 }
 
 impl Pcm {
@@ -45,11 +47,24 @@ impl Pcm {
         Self {
             sample_rate,
             samples: samples.into_boxed_slice(),
+            source_rate: sample_rate,
+            source_bits: None,
         }
     }
 
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
+    }
+
+    /// The sample rate of the decoded file, before resampling.
+    pub fn source_sample_rate(&self) -> u32 {
+        self.source_rate
+    }
+
+    /// The decoded file's bit depth, for formats that store PCM samples
+    /// (WAV, AIFF, FLAC, ALAC). `None` for lossy formats.
+    pub fn source_bits_per_sample(&self) -> Option<u32> {
+        self.source_bits
     }
 
     pub fn frames(&self) -> usize {
@@ -124,6 +139,7 @@ pub fn decode_file(path: &Path, target_rate: u32) -> Result<Pcm, DecodeError> {
         .as_ref()
         .and_then(|p| p.audio())
         .ok_or_else(|| DecodeError::Format("no audio codec parameters".into()))?;
+    let source_bits = params.bits_per_sample;
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(params, &AudioDecoderOptions::default())
         .map_err(format_error)?;
@@ -160,7 +176,11 @@ pub fn decode_file(path: &Path, target_rate: u32) -> Result<Pcm, DecodeError> {
     } else {
         resample(&stereo, source_rate, target_rate)?
     };
-    Ok(Pcm::from_interleaved(target_rate, samples))
+    Ok(Pcm {
+        source_rate,
+        source_bits,
+        ..Pcm::from_interleaved(target_rate, samples)
+    })
 }
 
 fn resample(stereo: &[f32], from: u32, to: u32) -> Result<Vec<f32>, DecodeError> {
@@ -232,6 +252,27 @@ mod tests {
         // Level survives resampling (allowing for edge transients).
         let peak = pcm.overview(4)[1];
         assert!((peak - 0.5).abs() < 0.02, "{peak}");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn reports_the_source_format() {
+        let path = temp("24bit");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 96_000,
+            bits_per_sample: 24,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+        for i in 0..9_600 {
+            writer.write_sample(i % 1000 * 1000).unwrap();
+        }
+        writer.finalize().unwrap();
+        let pcm = decode_file(&path, 48_000).unwrap();
+        assert_eq!(pcm.sample_rate(), 48_000);
+        assert_eq!(pcm.source_sample_rate(), 96_000);
+        assert_eq!(pcm.source_bits_per_sample(), Some(24));
         std::fs::remove_file(path).unwrap();
     }
 

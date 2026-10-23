@@ -41,8 +41,10 @@ pub(crate) fn downmix_decimate(samples: &[f32], sample_rate: u32) -> Mono {
     let factor = (sample_rate / TARGET_RATE).max(1) as usize;
     let rate = f64::from(sample_rate) / factor as f64;
     let frames = samples
-        .chunks_exact(2)
-        .map(|f| 0.5 * (f64::from(f[0]) + f64::from(f[1])));
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[l, r]| 0.5 * (f64::from(l) + f64::from(r)));
     let samples = if factor == 1 {
         frames.map(|s| s as f32).collect()
     } else {

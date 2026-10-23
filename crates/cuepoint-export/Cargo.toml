@@ -7,6 +7,15 @@ license.workspace = true
 publish = false
 
 [dependencies]
+cuepoint-analysis = { path = "../cuepoint-analysis" }
+cuepoint-core = { path = "../cuepoint-core" }
+thiserror = "2"
+
+[dev-dependencies]
+# Independent reader used only in tests to check our files parse (MPL-2.0,
+# never shipped).
+rekordcrate = "0.3"
+binrw = "0.14"
 
 [lints]
 workspace = true

@@ -63,8 +63,8 @@ pub(crate) fn colour_waveform(samples: &[f32], sample_rate: u32) -> ColourWavefo
         let start = (point * sr).div_ceil(pps) as usize;
         let end = (((point + 1) * sr).div_ceil(pps)).min(frames) as usize;
         let (mut low, mut mid, mut high) = (0f64, 0f64, 0f64);
-        for frame in samples[2 * start..2 * end].chunks_exact(2) {
-            let mono = 0.5 * (f64::from(frame[0]) + f64::from(frame[1]));
+        for &[l, r] in samples[2 * start..2 * end].as_chunks::<2>().0 {
+            let mono = 0.5 * (f64::from(l) + f64::from(r));
             let above_low = low_hp.process(mono);
             low = low.max(low_lp.process(mono).abs());
             mid = mid.max(high_lp.process(above_low).abs());

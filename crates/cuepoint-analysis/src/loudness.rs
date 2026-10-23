@@ -75,10 +75,12 @@ pub(crate) fn integrated_loudness(samples: &[f32], sample_rate: u32) -> Option<f
         .chunks_exact(2 * segment_len)
         .map(|segment| {
             segment
-                .chunks_exact(2)
-                .map(|frame| {
-                    let l = filters[0].process(f64::from(frame[0]));
-                    let r = filters[1].process(f64::from(frame[1]));
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&[l, r]| {
+                    let l = filters[0].process(f64::from(l));
+                    let r = filters[1].process(f64::from(r));
                     l * l + r * r
                 })
                 .sum()
