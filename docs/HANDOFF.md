@@ -10,19 +10,22 @@ Cuepoint is a clean-room, pure-Rust rekordbox 7.2.19 rewrite. The plan is in `do
 | M1 Library reader (rekordbox XML, master.db via SQLCipher, egui browser) | Merged ([adamsardo/Cuepoint#3](https://github.com/adamsardo/Cuepoint/pull/3)) |
 | M2 Two-deck playback (engine, CDJ cue, loops, mixer, no-alloc audio thread) | Merged ([adamsardo/Cuepoint#4](https://github.com/adamsardo/Cuepoint/pull/4)) |
 | M3 Analysis (BPM/grid, key, colour waveform, loudness) and beat sync | Merged ([adamsardo/Cuepoint#5](https://github.com/adamsardo/Cuepoint/pull/5)) |
-| M4 USB export (export.pdb, ANLZ .DAT/.EXT, Export menu, `cuepoint export` command) | Under Codex review: [adamsardo/Cuepoint#6](https://github.com/adamsardo/Cuepoint/pull/6), branch `claude/sweet-lovelace-aobomc` |
+| M4 USB export (export.pdb, ANLZ .DAT/.EXT, Export menu, `cuepoint export` command) | In review: [adamsardo/Cuepoint#6](https://github.com/adamsardo/Cuepoint/pull/6), branch `claude/sweet-lovelace-aobomc`. All 3 Codex findings are fixed (`75e74ba`); Codex is re-reviewing |
 
-All 99 tests pass. `cargo clippy --all-targets` and `cargo fmt --check` are clean.
+All 102 tests pass. `cargo clippy --all-targets` and `cargo fmt --check` are clean.
 
 ## Next steps
 
-1. Answer any Codex findings on [adamsardo/Cuepoint#6](https://github.com/adamsardo/Cuepoint/pull/6), then merge.
+1. Check Codex's re-review of [adamsardo/Cuepoint#6](https://github.com/adamsardo/Cuepoint/pull/6). Fix any new findings, then merge.
 2. Hardware check: run `cargo run --release -p cuepoint -- export your.xml /Volumes/STICK` and load the stick on a CDJ.
 3. Milestone 5, Performance mode: 4 decks, FX families, sampler/sequencer, MIDI controllers (spec 03 and 06).
 
 ## Open items
 
 - **OneLibrary (`exportLibrary.db`):** SQLCipher-encrypted. Plan: the user supplies the key, as for `master.db`.
+- **Export behaviour:**
+  - Re-export keeps audio already on the stick only when the bytes match.
+  - Device paths are capped at 255 UTF-16 units: artist and album folders at 64 each, and the file name is trimmed to fit.
 - **Export gaps:** cues (written as empty lists), artwork, PSSI phrases, PQT2, PVBR seek data, `exportExt.pdb`.
 - **Placeholder values:** mixer EQ and fader curves are generic DJ-mixer values, not rekordbox's. There is no key lock (needs the time-stretcher).
 - **Sync scope:** beat sync only, not bar sync. Analysis is DSP; the ML models are Milestone 7.
