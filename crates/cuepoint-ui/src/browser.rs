@@ -1258,9 +1258,27 @@ impl Browser {
         let content = self.rows.len() as f32 * row_h;
         if content > body.height() {
             let length = (body.height() / content * track_rect.height()).max(20.0);
-            let top = track_rect.top() + self.scroll / max_scroll * (track_rect.height() - length);
+            let travel = (track_rect.height() - length).max(1.0);
+            let top = track_rect.top() + self.scroll / max_scroll * travel;
             let thumb = Rect::from_min_size(pos2(track_rect.left() + 4.0, top), vec2(4.5, length));
             paint::rounded(&p, thumb, 2.25, theme::TAB_OFF);
+            // Drag the thumb; press the track to jump the thumb there and
+            // keep dragging; scroll with the wheel over it too.
+            let bar = ui.interact(track_rect, ui.scope_id().with("vscrollbar"), Sense::drag());
+            let grab = Rect::from_x_y_ranges(track_rect.x_range(), thumb.y_range());
+            if bar.drag_started()
+                && let Some(pointer) = bar.interact_pointer_pos()
+                && !grab.contains(pointer)
+            {
+                let thumb_top = pointer.y - length / 2.0 - track_rect.top();
+                self.scroll = thumb_top / travel * max_scroll;
+            } else if bar.dragged() {
+                self.scroll += bar.drag_delta().y * max_scroll / travel;
+            }
+            if bar.hovered() {
+                self.scroll -= ui.input(|i| i.smooth_scroll_delta.y);
+            }
+            self.scroll = self.scroll.clamp(0.0, max_scroll);
         }
         // Horizontal scrollbar strip at the bottom; its thumb drags.
         let bottom = Rect::from_min_max(pos2(x, rect.bottom() - 12.0), rect.max);
@@ -1407,19 +1425,25 @@ impl Browser {
         }
         use egui::Key;
         let page = ((view_height / row_h) as isize - 1).max(1);
+        // Home and End are absolute; the others move from the highlight.
+        enum Move {
+            By(isize),
+            First,
+            Last,
+        }
         let (step, load) = ui.input(|i| {
             let step = if i.key_pressed(Key::ArrowDown) {
-                Some(1)
+                Some(Move::By(1))
             } else if i.key_pressed(Key::ArrowUp) {
-                Some(-1)
+                Some(Move::By(-1))
             } else if i.key_pressed(Key::PageDown) {
-                Some(page)
+                Some(Move::By(page))
             } else if i.key_pressed(Key::PageUp) {
-                Some(-page)
+                Some(Move::By(-page))
             } else if i.key_pressed(Key::Home) {
-                Some(isize::MIN / 2)
+                Some(Move::First)
             } else if i.key_pressed(Key::End) {
-                Some(isize::MAX / 2)
+                Some(Move::Last)
             } else {
                 None
             };
@@ -1437,10 +1461,12 @@ impl Browser {
             .and_then(|t| self.rows.iter().position(|&r| r == t));
         if let Some(step) = step {
             let last = self.rows.len() as isize - 1;
-            let row = match current {
-                Some(row) => (row as isize).saturating_add(step).clamp(0, last),
-                None if step < 0 => last,
-                None => 0,
+            let row = match (step, current) {
+                (Move::First, _) => 0,
+                (Move::Last, _) => last,
+                (Move::By(step), Some(row)) => (row as isize).saturating_add(step).clamp(0, last),
+                (Move::By(step), None) if step < 0 => last,
+                (Move::By(_), None) => 0,
             } as usize;
             self.selected = Some(self.rows[row]);
             let top = row as f32 * row_h;
@@ -1552,6 +1578,77 @@ mod tests {
             output.textures_delta.clear();
         }
         action
+    }
+
+    /// Runs one frame per entry of `frames`, each with its pointer events,
+    /// and returns the scroll position after each.
+    fn pointer_frames(browser: &mut Browser, library: &Library, frames: &[Vec<Event>]) -> Vec<f32> {
+        let mut scrolls = Vec::new();
+        let ctx = egui::Context::default();
+        let mut artwork = ArtworkCache::new();
+        let mut previews = PreviewCache::new(Arc::new(|_: &std::path::Path| None), None, 1);
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1512.0, 600.0));
+        for (n, events) in frames.iter().enumerate() {
+            let input = RawInput {
+                screen_rect: Some(screen),
+                time: Some(n as f64 * 0.05),
+                events: events.clone(),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                browser.show(ui, screen, library, None, &mut artwork, &mut previews);
+            });
+            output.textures_delta.clear();
+            scrolls.push(browser.scroll);
+        }
+        scrolls
+    }
+
+    #[test]
+    fn the_vertical_scrollbar_jumps_and_drags() {
+        let tracks = (0..200)
+            .map(|n| Track {
+                id: TrackId(n.to_string()),
+                title: format!("Track {n}"),
+                ..Track::default()
+            })
+            .collect();
+        let library = Library::new(tracks, Vec::new());
+        let mut browser = Browser::default();
+        // The scrollbar track runs down the list's right edge.
+        let at = |y: f32| pos2(1481.0, y);
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let scrolls = pointer_frames(
+            &mut browser,
+            &library,
+            &[
+                vec![],
+                vec![Event::PointerMoved(at(400.0))],
+                vec![button(at(400.0), true)],
+                vec![Event::PointerMoved(at(402.0))],
+                vec![Event::PointerMoved(at(452.0))],
+                vec![button(at(452.0), false)],
+            ],
+        );
+        let jumped = scrolls[3];
+        assert!(jumped > 0.0, "pressing the track jumps the thumb there");
+        assert!(scrolls[5] > jumped, "dragging scrolls further: {scrolls:?}");
+    }
+
+    #[test]
+    fn home_and_end_work_without_a_highlight() {
+        let library = library();
+        let mut browser = Browser::default();
+        frame(&mut browser, &library, &[(Key::Home, Modifiers::NONE)]);
+        assert_eq!(browser.selected, Some(0));
+        let mut browser = Browser::default();
+        frame(&mut browser, &library, &[(Key::End, Modifiers::NONE)]);
+        assert_eq!(browser.selected, Some(2));
     }
 
     #[test]
