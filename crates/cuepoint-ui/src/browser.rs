@@ -219,6 +219,9 @@ pub struct Browser {
     /// field drops its focus before the list reads the keys, so the list
     /// must not take that Return as "load".
     typing: bool,
+    /// Whether deck 2 is on screen (Performance mode), so the context menu
+    /// offers it.
+    two_decks: bool,
 }
 
 impl Default for Browser {
@@ -238,6 +241,7 @@ impl Default for Browser {
             context_row: None,
             view: ListView::Standard,
             typing: false,
+            two_decks: false,
         }
     }
 }
@@ -308,6 +312,11 @@ impl Browser {
             format!("{minutes} minutes")
         };
         format!("{} Tracks, {duration}, {size}", self.rows.len())
+    }
+
+    /// Whether the context menu offers deck 2 as well as Player A.
+    pub fn set_two_decks(&mut self, on: bool) {
+        self.two_decks = on;
     }
 
     /// Draws the browser into `rect`; returns what the user asked to do
@@ -1163,14 +1172,22 @@ impl Browser {
                 ap.circle_filled(cover.center() + vec2(0.0, 6.0), 4.0, theme::BUTTON_DARK);
             }
         }
-        // Highlight on press, as rekordbox does, not on release.
+        // Highlight on press, as rekordbox does, not on release. Presses on
+        // a menu or window above the list belong to that layer.
         let pressed = ui.input(|i| {
             i.pointer
                 .primary_pressed()
                 .then(|| i.pointer.press_origin())
                 .flatten()
         });
-        if let Some(row) = pressed.filter(|&pos| body.contains(pos)).and_then(row_at) {
+        let on_list = |pos: egui::Pos2| {
+            body.contains(pos)
+                && ui
+                    .ctx()
+                    .layer_id_at(pos)
+                    .is_none_or(|layer| layer == ui.layer_id())
+        };
+        if let Some(row) = pressed.filter(|&pos| on_list(pos)).and_then(row_at) {
             self.selected = Some(self.rows[row]);
         }
         let mut action = None;
@@ -1193,7 +1210,7 @@ impl Browser {
         }
         if let Some(track_index) = self.context_row {
             response.context_menu(|ui| {
-                for deck in 0..2 {
+                for deck in 0..if self.two_decks { 2 } else { 1 } {
                     let label = if deck == 0 {
                         "Load to Player A (Deck 1)".to_owned()
                     } else {

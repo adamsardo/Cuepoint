@@ -3,7 +3,9 @@
 mod artwork;
 mod browser;
 mod deck;
+pub mod disk_cache;
 mod export_view;
+mod jobs;
 mod mixer;
 mod paint;
 mod preview;

@@ -8,6 +8,9 @@
 /// Beats per bar. rekordbox grids are always 4/4.
 pub const BEATS_PER_BAR: u32 = 4;
 
+/// Tempos a grid edit may produce, as rekordbox allows.
+pub const EDIT_BPM_RANGE: std::ops::RangeInclusive<f64> = 20.0..=999.0;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TempoMarker {
     /// Time of this marker's beat, seconds from the start of the track.
@@ -121,6 +124,12 @@ impl BeatGrid {
         Some(marker.time + local * 60.0 / marker.bpm)
     }
 
+    /// Whether the grid has markers and every tempo is in [`EDIT_BPM_RANGE`],
+    /// so an edit that produced it can be applied.
+    pub fn tempos_in_edit_range(&self) -> bool {
+        !self.is_empty() && self.markers.iter().all(|m| EDIT_BPM_RANGE.contains(&m.bpm))
+    }
+
     pub fn bpm_at(&self, time: f64) -> Option<f64> {
         self.markers.get(self.segment(time)).map(|m| m.bpm)
     }
@@ -177,8 +186,12 @@ impl BeatGrid {
     }
 
     /// Each beat lengthened by `seconds` (negative shortens), keeping the
-    /// first marker in place: the grid widens or narrows.
+    /// first marker in place: the grid widens or narrows. Unchanged if that
+    /// would make any beat zero or negative in length.
     pub fn stretched(&self, seconds: f64) -> Self {
+        if self.markers.iter().any(|m| 60.0 / m.bpm + seconds <= 0.0) {
+            return self.clone();
+        }
         // Each marker moves by `seconds` per beat before it, so every
         // segment keeps its whole number of beats whatever its tempo.
         let markers = self
@@ -225,6 +238,12 @@ mod tests {
             (0.25, 126.0)
         );
         assert!(BeatGrid::default().shifted(1.0).is_empty());
+        // Edits past the tempo range are flagged; a stretch that would
+        // make a beat zero-length does nothing.
+        assert!(grid.tempos_in_edit_range());
+        assert!(!grid.tempo_scaled(16.0).tempos_in_edit_range());
+        assert!(!grid.tempo_scaled(1.0 / 16.0).tempos_in_edit_range());
+        assert_eq!(grid.stretched(-0.5), grid);
     }
 
     #[test]

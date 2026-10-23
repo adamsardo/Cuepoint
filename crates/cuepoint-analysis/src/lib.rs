@@ -78,13 +78,20 @@ pub struct Analysis {
     pub loudness_lufs: Option<f32>,
 }
 
-/// Analyses interleaved stereo `samples` at `sample_rate`.
 /// Only the 3-band colour waveform of interleaved stereo `samples`, for
 /// previews that do not need the rest of the analysis.
 pub fn colour_waveform(samples: &[f32], sample_rate: u32) -> ColourWaveform {
     waveform::colour_waveform(samples, sample_rate)
 }
 
+/// The 3-band peak waveform device export encodes (ANLZ `PWAV` to `PWV5`):
+/// plain peaks of separate bands, full scale 255, rather than the colour
+/// waveform's envelopes fitted to rekordbox's on-screen look.
+pub fn peak_waveform(samples: &[f32], sample_rate: u32) -> ColourWaveform {
+    waveform::peak_waveform(samples, sample_rate)
+}
+
+/// Analyses interleaved stereo `samples` at `sample_rate`.
 pub fn analyze(samples: &[f32], sample_rate: u32, settings: &AnalysisSettings) -> Analysis {
     let settings = settings.sanitised();
     if sample_rate == 0 {

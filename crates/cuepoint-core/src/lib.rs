@@ -6,7 +6,7 @@ mod key;
 mod playlist;
 mod track;
 
-pub use beatgrid::{BEATS_PER_BAR, BeatGrid, TempoMarker};
+pub use beatgrid::{BEATS_PER_BAR, BeatGrid, EDIT_BPM_RANGE, TempoMarker};
 pub use cue::Cue;
 pub use key::MusicalKey;
 pub use playlist::{PlaylistKind, PlaylistNode};

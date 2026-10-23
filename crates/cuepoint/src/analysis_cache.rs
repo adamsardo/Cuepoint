@@ -6,8 +6,11 @@ use std::path::{Path, PathBuf};
 
 use cuepoint_analysis::ColourWaveform;
 use cuepoint_core::{BeatGrid, MusicalKey, TempoMarker};
+use cuepoint_ui::disk_cache;
 
 const VERSION: u8 = 1;
+/// The cache's size on disk, at most: a few thousand tracks' worth.
+const MAX_BYTES: u64 = 1 << 30;
 
 /// What a load needs from analysis.
 #[derive(Debug, Clone, PartialEq)]
@@ -18,9 +21,14 @@ pub struct Cached {
 }
 
 pub fn read(dir: &Path, audio: &Path) -> Option<Cached> {
-    decode(&std::fs::read(file(dir, audio)?).ok()?)
+    let file = file(dir, audio)?;
+    let cached = decode(&std::fs::read(&file).ok()?)?;
+    disk_cache::touch(&file);
+    Some(cached)
 }
 
+/// Writes `entry`, then trims the cache to [`MAX_BYTES`], dropping the
+/// least recently used entries.
 pub fn write(dir: &Path, audio: &Path, entry: &Cached) {
     let Some(file) = file(dir, audio) else { return };
     if std::fs::create_dir_all(dir).is_ok() {
@@ -28,6 +36,7 @@ pub fn write(dir: &Path, audio: &Path, entry: &Cached) {
         if std::fs::write(&temp, encode(entry)).is_ok() {
             let _ = std::fs::rename(temp, file);
         }
+        disk_cache::trim_cache_dir(dir, "analysis", MAX_BYTES);
     }
 }
 

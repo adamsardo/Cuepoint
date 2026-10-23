@@ -89,7 +89,13 @@ enum Status {
     Loaded,
     Info(String),
     Error(String),
+    /// A refused or failed track load, shown until it expires; then the
+    /// footer goes back to the list summary.
+    LoadError(String, std::time::Instant),
 }
+
+/// How long a load error stays in the footer.
+const LOAD_ERROR_SECONDS: u64 = 6;
 
 struct KeyPrompt {
     path: PathBuf,
@@ -215,13 +221,36 @@ impl CuepointApp {
                     Mode::Performance => self.player.free_deck(),
                 };
                 let Some(deck) = deck.or(free) else {
-                    self.status = Status::Error("Both decks are playing.".into());
+                    self.load_error("Both decks are playing.".into());
                     return;
                 };
                 if let Err(message) = self.player.load(deck, track) {
-                    self.status = Status::Error(message);
+                    self.load_error(message);
                 }
             }
+        }
+    }
+
+    fn load_error(&mut self, message: String) {
+        self.status = Status::LoadError(message, std::time::Instant::now());
+    }
+
+    /// Expires load errors, and moves Player A's load message to the footer
+    /// in Export mode while a track is loaded: the player shows a message
+    /// only when it is empty, and a failed load leaves the old track up.
+    fn update_status(&mut self) {
+        if let Status::LoadError(_, at) = &self.status
+            && at.elapsed().as_secs() >= LOAD_ERROR_SECONDS
+        {
+            self.status = Status::Loaded;
+        }
+        let deck = &mut self.player.decks[0];
+        if self.mode == Mode::Export
+            && deck.loaded.is_some()
+            && deck.loading.is_none()
+            && let Some(message) = deck.message.take()
+        {
+            self.load_error(message);
         }
     }
 
@@ -291,7 +320,9 @@ impl CuepointApp {
                 "No library open. Right-click here to open a rekordbox XML or master.db.".into()
             }
             Status::Loaded => self.browser.summary(&self.library),
-            Status::Info(message) | Status::Error(message) => message.clone(),
+            Status::Info(message) | Status::Error(message) | Status::LoadError(message, _) => {
+                message.clone()
+            }
         };
         if self.player.output_is_silent() {
             format!("{} · {text}", self.player.output_description())
@@ -351,6 +382,7 @@ impl eframe::App for CuepointApp {
 impl CuepointApp {
     fn draw(&mut self, ui: &mut egui::Ui) {
         self.player.poll_loads();
+        self.update_status();
         self.poll_export();
         self.artwork.poll(ui.ctx());
         self.previews.poll();
@@ -424,6 +456,7 @@ impl CuepointApp {
             .player
             .loaded_id(0)
             .and_then(|id| self.library.track_index(id));
+        self.browser.set_two_decks(self.mode == Mode::Performance);
         if let Some(action) = self.browser.show(
             ui,
             browser,
@@ -512,10 +545,10 @@ fn export_cli(library: &Path, dest: &Path) -> i32 {
 /// Track list previews, made from Cuepoint's own 3-band waveform and kept
 /// in the user's cache folder.
 fn preview_cache() -> cuepoint_ui::PreviewCache {
-    const RATE: u32 = 44_100;
+    // The waveform works at any rate, so the audio is not resampled.
     let worker = |path: &Path| {
-        let pcm = cuepoint_engine::decode_file(path, RATE).ok()?;
-        let bands = cuepoint_analysis::colour_waveform(pcm.samples(), RATE);
+        let pcm = cuepoint_engine::decode_native(path).ok()?;
+        let bands = cuepoint_analysis::colour_waveform(pcm.samples(), pcm.sample_rate());
         Some(cuepoint_ui::preview_from_bands(
             &bands.low,
             &bands.mid,

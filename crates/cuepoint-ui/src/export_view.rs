@@ -73,6 +73,8 @@ pub struct ExportView {
     taps: Vec<f64>,
     /// The track the undo history belongs to.
     grid_track: Option<cuepoint_core::TrackId>,
+    /// MEMORY tab scroll position, in points.
+    memory_scroll: f32,
 }
 
 impl Default for ExportView {
@@ -88,6 +90,7 @@ impl Default for ExportView {
             grid_redo: Vec::new(),
             taps: Vec::new(),
             grid_track: None,
+            memory_scroll: 0.0,
         }
     }
 }
@@ -352,7 +355,7 @@ impl ExportView {
         self.overview(ui, main, deck, state, sample_rate, commands);
         self.zoomed(ui, main, deck, state, sample_rate);
         self.lower_strip(ui, main, deck, state, sample_rate, commands);
-        self.side_panel(ui, side, deck, state, sample_rate);
+        self.side_panel(ui, side, deck, sample_rate, commands);
         if hidden.is_some() {
             deck.loaded = hidden;
         }
@@ -1437,6 +1440,9 @@ impl ExportView {
             paint::text_centred(p, b, text, label.clone(), theme::TEXT_OFF);
         }
 
+        // Edits that would leave the tempo range are refused, so repeated
+        // x2 cannot build a grid with millions of beats to draw.
+        let edit = edit.filter(|g| g.tempos_in_edit_range());
         if let (Some(new), Some(current)) = (edit, grid) {
             self.grid_undo.push(current);
             self.grid_redo.clear();
@@ -1464,9 +1470,9 @@ impl ExportView {
         &mut self,
         ui: &Ui,
         rect: Rect,
-        deck: &DeckView,
-        state: &DeckState,
+        deck: &mut DeckView,
         sample_rate: u32,
+        commands: &mut Vec<Command>,
     ) {
         let p = ui.painter_at(rect);
         paint::fill(&p, rect, theme::PANEL);
@@ -1515,7 +1521,25 @@ impl ExportView {
                 theme::TEXT,
             );
         };
-        let memory: Vec<&Cue> = cues.iter().filter(|c| c.hot_cue.is_none()).collect();
+        // Memory cues with their index in the track's cue list.
+        let memory: Vec<(usize, &Cue)> = cues
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.hot_cue.is_none())
+            .collect();
+        // A click on a cue row seeks to it; its cross deletes it from the
+        // loaded track. The cross is registered last so it wins the click.
+        let mut seek = None;
+        let mut delete = None;
+        let mut row_clicks = |row: Rect, cross_x: f32, index: usize, cue: &Cue| {
+            if click(ui, row, ("cue_row", index)).clicked() {
+                seek = Some(cue.start);
+            }
+            let cross = Rect::from_center_size(pos2(cross_x, row.center().y), vec2(16.0, 16.0));
+            if click(ui, cross, ("cue_delete", index)).clicked() {
+                delete = Some(index);
+            }
+        };
         match self.side_tab {
             // Eight 26 pt rows, A to H.
             SideTab::HotCue => {
@@ -1526,8 +1550,15 @@ impl ExportView {
                     );
                     paint::fill(&p, row, theme::BAR);
                     let letter = char::from(b'A' + i as u8);
-                    match cues.iter().find(|c| c.hot_cue == Some(i as u8)) {
-                        Some(cue) => entry(&p, row, cue, Some(letter)),
+                    match cues
+                        .iter()
+                        .enumerate()
+                        .find(|(_, c)| c.hot_cue == Some(i as u8))
+                    {
+                        Some((index, cue)) => {
+                            entry(&p, row, cue, Some(letter));
+                            row_clicks(row, row.right() - 17.0, index, cue);
+                        }
                         None => {
                             let text = letter.to_string();
                             let font = theme::regular(theme::BODY_SIZE);
@@ -1544,16 +1575,32 @@ impl ExportView {
                     }
                 }
             }
-            // Ten 21 pt rows of memory cues, each with its delete cross.
+            // Ten 21 pt rows of memory cues, each with its delete cross,
+            // scrolled by the wheel when there are more.
             SideTab::Memory => {
-                for i in 0..10 {
+                const ROWS: usize = 10;
+                const PITCH: f32 = 22.0;
+                let area = Rect::from_min_size(
+                    pos2(list.left(), y + 6.0),
+                    vec2(list.width(), ROWS as f32 * PITCH),
+                );
+                let max_scroll = memory.len().saturating_sub(ROWS) as f32 * PITCH;
+                if ui.rect_contains_pointer(area) {
+                    self.memory_scroll -= ui.input(|i| i.smooth_scroll_delta.y);
+                }
+                self.memory_scroll = self.memory_scroll.clamp(0.0, max_scroll);
+                let top = (self.memory_scroll / PITCH).round() as usize;
+                for i in 0..ROWS {
                     let row = Rect::from_min_size(
-                        pos2(list.left(), y + 6.0 + i as f32 * 22.0),
+                        pos2(list.left(), y + 6.0 + i as f32 * PITCH),
                         vec2(list.width(), 21.0),
                     );
                     paint::fill(&p, row, theme::BAR);
-                    match memory.get(i) {
-                        Some(cue) => memory_entry(&p, row, cue),
+                    match memory.get(top + i) {
+                        Some(&(index, cue)) => {
+                            memory_entry(&p, row, cue);
+                            row_clicks(row, row.right() - 10.0, index, cue);
+                        }
                         None => paint::cross(
                             &p,
                             pos2(row.right() - 10.0, row.center().y),
@@ -1580,7 +1627,17 @@ impl ExportView {
                 }
             }
         }
-        let _ = (state, sample_rate);
+        if let Some(start) = seek.filter(|_| delete.is_none()) {
+            commands.push(Command::Seek {
+                deck: deck.index,
+                frame: start * f64::from(sample_rate.max(1)),
+            });
+        }
+        if let Some(index) = delete
+            && let Some(loaded) = &mut deck.loaded
+        {
+            loaded.track.cues.remove(index);
+        }
         let tabs = [
             (SideTab::Memory, "MEMORY", 8.0),
             (SideTab::HotCue, "HOT CUE", 72.0),

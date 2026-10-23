@@ -13,6 +13,10 @@
 //! The fitted model tracks rekordbox's bands with correlations of 0.98 to
 //! 0.99 (low), 0.95 to 0.97 (mid) and 0.95 to 0.97 (high). Values are
 //! absolute, not normalised per track, so quiet tracks draw small.
+//!
+//! Device export instead takes [`peak_waveform`]: plain per-point peaks of
+//! three bands that do not overlap, scaled so full scale is 255, which is
+//! what its ANLZ waveform encoders expect.
 
 use crate::filter::{linkwitz_riley_highpass, linkwitz_riley_lowpass};
 
@@ -22,6 +26,9 @@ const LOW_CUTOFF_HZ: f64 = 400.0;
 const MID_LOW_HZ: f64 = 250.0;
 const MID_HIGH_HZ: f64 = 1500.0;
 const HIGH_CUTOFF_HZ: f64 = 1500.0;
+/// Crossovers of the export waveform's bands.
+const PEAK_LOW_MID_HZ: f64 = 200.0;
+const PEAK_MID_HIGH_HZ: f64 = 2500.0;
 
 /// Per band: envelope decay per point, exponent and gain (on rekordbox's
 /// 0..=127 scale).
@@ -96,15 +103,6 @@ pub(crate) fn steady_level(band: usize, amplitude: f64) -> u8 {
 
 pub(crate) fn colour_waveform(samples: &[f32], sample_rate: u32) -> ColourWaveform {
     let rate = f64::from(sample_rate);
-    let pps = u64::from(WAVEFORM_POINTS_PER_SECOND);
-    let sr = u64::from(sample_rate);
-    let frames = (samples.len() / 2) as u64;
-    let points = if sr == 0 {
-        0
-    } else {
-        (frames * pps).div_ceil(sr)
-    };
-
     let mut low_lp = linkwitz_riley_lowpass(rate, LOW_CUTOFF_HZ);
     let mut mid_hp = linkwitz_riley_highpass(rate, MID_LOW_HZ);
     let mut mid_lp = linkwitz_riley_lowpass(rate, MID_HIGH_HZ);
@@ -114,7 +112,59 @@ pub(crate) fn colour_waveform(samples: &[f32], sample_rate: u32) -> ColourWavefo
         Envelope::new(MID_SHAPE),
         Envelope::new(HIGH_SHAPE),
     ];
+    per_point(samples, sample_rate, |frames| {
+        let (mut low, mut mid, mut high) = (0f64, 0f64, 0f64);
+        for &[l, r] in frames {
+            let mono = 0.5 * (f64::from(l) + f64::from(r));
+            low = low.max(low_lp.process(mono).abs());
+            mid = mid.max(mid_lp.process(mid_hp.process(mono)).abs());
+            high = high.max(high_hp.process(mono).abs());
+        }
+        [
+            envelopes[0].next(low),
+            envelopes[1].next(mid),
+            envelopes[2].next(high),
+        ]
+    })
+}
 
+/// Peak absolute amplitude per band per point, full scale 255, from bands
+/// split by crossovers at 200 Hz and 2.5 kHz.
+pub(crate) fn peak_waveform(samples: &[f32], sample_rate: u32) -> ColourWaveform {
+    let rate = f64::from(sample_rate);
+    let mut low_lp = linkwitz_riley_lowpass(rate, PEAK_LOW_MID_HZ);
+    let mut low_hp = linkwitz_riley_highpass(rate, PEAK_LOW_MID_HZ);
+    let mut high_lp = linkwitz_riley_lowpass(rate, PEAK_MID_HIGH_HZ);
+    let mut high_hp = linkwitz_riley_highpass(rate, PEAK_MID_HIGH_HZ);
+    let byte = |peak: f64| (peak * 255.0).round().clamp(0.0, 255.0) as u8;
+    per_point(samples, sample_rate, |frames| {
+        let (mut low, mut mid, mut high) = (0f64, 0f64, 0f64);
+        for &[l, r] in frames {
+            let mono = 0.5 * (f64::from(l) + f64::from(r));
+            let above_low = low_hp.process(mono);
+            low = low.max(low_lp.process(mono).abs());
+            mid = mid.max(high_lp.process(above_low).abs());
+            high = high.max(high_hp.process(above_low).abs());
+        }
+        [byte(low), byte(mid), byte(high)]
+    })
+}
+
+/// Splits interleaved stereo `samples` into 1/150 s points and collects the
+/// three band levels `level` makes of each point's frames, in order.
+fn per_point(
+    samples: &[f32],
+    sample_rate: u32,
+    mut level: impl FnMut(&[[f32; 2]]) -> [u8; 3],
+) -> ColourWaveform {
+    let pps = u64::from(WAVEFORM_POINTS_PER_SECOND);
+    let sr = u64::from(sample_rate);
+    let frames = (samples.len() / 2) as u64;
+    let points = if sr == 0 {
+        0
+    } else {
+        (frames * pps).div_ceil(sr)
+    };
     let mut out = ColourWaveform {
         points_per_second: WAVEFORM_POINTS_PER_SECOND,
         low: Vec::with_capacity(points as usize),
@@ -126,16 +176,10 @@ pub(crate) fn colour_waveform(samples: &[f32], sample_rate: u32) -> ColourWavefo
         // point's start, so slices tile the track exactly.
         let start = (point * sr).div_ceil(pps) as usize;
         let end = (((point + 1) * sr).div_ceil(pps)).min(frames) as usize;
-        let (mut low, mut mid, mut high) = (0f64, 0f64, 0f64);
-        for &[l, r] in samples[2 * start..2 * end].as_chunks::<2>().0 {
-            let mono = 0.5 * (f64::from(l) + f64::from(r));
-            low = low.max(low_lp.process(mono).abs());
-            mid = mid.max(mid_lp.process(mid_hp.process(mono)).abs());
-            high = high.max(high_hp.process(mono).abs());
-        }
-        out.low.push(envelopes[0].next(low));
-        out.mid.push(envelopes[1].next(mid));
-        out.high.push(envelopes[2].next(high));
+        let [low, mid, high] = level(samples[2 * start..2 * end].as_chunks::<2>().0);
+        out.low.push(low);
+        out.mid.push(mid);
+        out.high.push(high);
     }
     out
 }

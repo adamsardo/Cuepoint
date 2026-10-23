@@ -3,12 +3,20 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::{Receiver, channel};
+
+use crate::disk_cache;
+use crate::jobs::PathQueue;
 
 /// Bins per preview: one per device pixel of rekordbox's 165 pt preview.
 pub const PREVIEW_BINS: usize = 330;
 const CACHE_VERSION: u8 = 1;
+/// The preview cache's size on disk, at most: about 100k previews.
+const MAX_CACHE_BYTES: u64 = 100 << 20;
+/// Preview cache writes this run, to trim every so often.
+static WRITES: AtomicU32 = AtomicU32::new(0);
 
 /// Mean low, mid and high level per bin, 0..=255.
 pub type Preview = Vec<[u8; 3]>;
@@ -22,21 +30,33 @@ enum Entry {
     Ready(Preview),
 }
 
+struct Slot {
+    entry: Entry,
+    /// The frame this path was last asked for.
+    used: u64,
+}
+
 pub struct PreviewCache {
-    requests: Sender<PathBuf>,
+    queue: Arc<PathQueue>,
     results: Receiver<(PathBuf, Option<Preview>)>,
-    entries: HashMap<PathBuf, Entry>,
+    entries: HashMap<PathBuf, Slot>,
+    frame: u64,
+}
+
+impl Drop for PreviewCache {
+    fn drop(&mut self) {
+        self.queue.close();
+    }
 }
 
 impl PreviewCache {
     /// Starts `threads` workers running `worker`, caching under `cache_dir`.
     pub fn new(worker: Arc<PreviewWorker>, cache_dir: Option<PathBuf>, threads: usize) -> Self {
-        let (requests, jobs) = channel::<PathBuf>();
+        let queue = Arc::new(PathQueue::default());
         let (done, results) = channel();
-        let jobs = Arc::new(Mutex::new(jobs));
         for i in 0..threads.max(1) {
             let (jobs, done, worker, cache_dir) = (
-                jobs.clone(),
+                queue.clone(),
                 done.clone(),
                 worker.clone(),
                 cache_dir.clone(),
@@ -44,9 +64,7 @@ impl PreviewCache {
             std::thread::Builder::new()
                 .name(format!("cuepoint-preview-{i}"))
                 .spawn(move || {
-                    // Hold the lock only while waiting for the next job.
-                    let next = || jobs.lock().ok()?.recv().ok();
-                    while let Some(path) = next() {
+                    while let Some(path) = jobs.next() {
                         let file = cache_dir.as_deref().and_then(|dir| cache_file(dir, &path));
                         let preview = file.as_deref().and_then(read_cached).or_else(|| {
                             // A panic counts as no preview and keeps the
@@ -57,8 +75,13 @@ impl PreviewCache {
                                 }))
                                 .ok()
                                 .flatten()?;
-                            if let Some(file) = &file {
+                            if let (Some(file), Some(dir)) = (&file, &cache_dir) {
                                 write_cached(file, &preview);
+                                // Trimming lists the directory, so only
+                                // now and then.
+                                if WRITES.fetch_add(1, Ordering::Relaxed).is_multiple_of(256) {
+                                    disk_cache::trim_cache_dir(dir, "preview", MAX_CACHE_BYTES);
+                                }
                             }
                             Some(preview)
                         });
@@ -70,37 +93,56 @@ impl PreviewCache {
                 .expect("spawn preview thread");
         }
         Self {
-            requests,
+            queue,
             results,
             entries: HashMap::new(),
+            frame: 0,
         }
     }
 
-    /// Collects finished previews. Call once per frame.
+    /// Collects finished previews and withdraws requests for rows no longer
+    /// drawn, so scrolling past thousands of rows does not queue thousands
+    /// of decodes. Call once per frame, before `get`.
     pub fn poll(&mut self) -> bool {
+        self.frame += 1;
         let mut any = false;
         while let Ok((path, preview)) = self.results.try_recv() {
             let entry = preview.map_or(Entry::Missing, Entry::Ready);
-            self.entries.insert(path, entry);
+            let used = self.entries.get(&path).map_or(self.frame, |s| s.used);
+            self.entries.insert(path, Slot { entry, used });
             any = true;
+        }
+        let (entries, frame) = (&self.entries, self.frame);
+        for path in self
+            .queue
+            .withdraw(|path| entries.get(path).is_some_and(|s| s.used + 1 >= frame))
+        {
+            self.entries.remove(&path);
         }
         any
     }
 
     /// The preview for `path` if ready; otherwise starts making it.
     pub fn get(&mut self, path: &Path) -> Option<&Preview> {
-        if !self.entries.contains_key(path) {
-            self.entries.insert(path.to_owned(), Entry::Pending);
-            let _ = self.requests.send(path.to_owned());
-        }
-        match self.entries.get(path) {
-            Some(Entry::Ready(preview)) => Some(preview),
+        let frame = self.frame;
+        let slot = self.entries.entry(path.to_owned()).or_insert_with(|| {
+            self.queue.push(path.to_owned());
+            Slot {
+                entry: Entry::Pending,
+                used: frame,
+            }
+        });
+        slot.used = frame;
+        match &slot.entry {
+            Entry::Ready(preview) => Some(preview),
             _ => None,
         }
     }
 
     pub fn is_pending(&self) -> bool {
-        self.entries.values().any(|e| matches!(e, Entry::Pending))
+        self.entries
+            .values()
+            .any(|s| matches!(s.entry, Entry::Pending))
     }
 }
 
@@ -143,6 +185,7 @@ fn read_cached(file: &Path) -> Option<Preview> {
     if version != CACHE_VERSION || body.len() % 3 != 0 {
         return None;
     }
+    disk_cache::touch(file);
     Some(body.as_chunks::<3>().0.to_vec())
 }
 

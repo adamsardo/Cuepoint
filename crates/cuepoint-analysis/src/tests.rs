@@ -328,6 +328,30 @@ fn waveform_bands_separate() {
     assert!(median(&high.low) <= 2);
 }
 
+#[test]
+fn export_waveform_is_plain_peaks() {
+    // A 0.5 amplitude sine peaks at about 128 in its own band and leaves
+    // the others near zero: full scale is 255, with no envelope gain.
+    for (hz, band) in [(60.0, 0), (6000.0, 2)] {
+        let frames = (2.0 * f64::from(RATE)) as usize;
+        let samples: Vec<f32> = (0..frames)
+            .flat_map(|n| {
+                let v = (0.5 * (TAU * hz * n as f64 / f64::from(RATE)).sin()) as f32;
+                [v, v]
+            })
+            .collect();
+        let w = crate::peak_waveform(&samples, RATE);
+        let bands = [&w.low, &w.mid, &w.high];
+        assert!(
+            median(bands[band]).abs_diff(128) <= 4,
+            "{hz} Hz: {}",
+            median(bands[band])
+        );
+        let other = if band == 0 { &w.high } else { &w.low };
+        assert!(median(other) <= 2);
+    }
+}
+
 /// Times a full analysis of a 6-minute track. Run with
 /// `cargo test -p cuepoint-analysis --release -- --ignored --nocapture`.
 #[test]
