@@ -399,6 +399,52 @@ pub fn lock(painter: &Painter, c: Pos2, colour: Color32) {
     );
 }
 
+/// An open padlock: body with the shackle lifted to one side.
+pub fn open_lock(painter: &Painter, c: Pos2, colour: Color32) {
+    let body = Rect::from_center_size(c + vec2(0.0, 3.0), vec2(11.0, 8.0));
+    rounded(painter, body, 1.5, colour);
+    painter.circle_filled(c + vec2(0.0, 2.5), 1.5, theme::BUTTON);
+    fill(
+        painter,
+        Rect::from_center_size(c + vec2(0.0, 4.5), vec2(1.2, 2.5)),
+        theme::BUTTON,
+    );
+    arc(
+        painter,
+        c + vec2(0.0, -2.5),
+        3.8,
+        std::f32::consts::PI,
+        std::f32::consts::TAU,
+        1.8,
+        colour,
+    );
+    line(
+        painter,
+        c + vec2(-3.8, -2.5),
+        c + vec2(-3.8, -1.0),
+        1.8,
+        colour,
+    );
+}
+
+/// A curved undo (or redo) arrow.
+pub fn curved_arrow(painter: &Painter, c: Pos2, undo: bool, colour: Color32) {
+    let dir = if undo { 1.0 } else { -1.0 };
+    let centre = c + vec2(dir * 0.5, 1.5);
+    let (from, to) = if undo { (3.6, 7.0) } else { (-0.5, -3.9) };
+    arc(painter, centre, 4.5, from, to, 1.6, colour);
+    let tip = centre + Vec2::angled(from) * 4.5;
+    triangle(
+        painter,
+        [
+            tip + vec2(-dir * 3.0, 0.0),
+            tip + vec2(dir * 1.5, -3.0),
+            tip + vec2(dir * 1.5, 3.0),
+        ],
+        colour,
+    );
+}
+
 /// A plus inside a circle.
 pub fn plus_circle(painter: &Painter, c: Pos2, colour: Color32) {
     painter.circle_filled(c, 5.0, colour);

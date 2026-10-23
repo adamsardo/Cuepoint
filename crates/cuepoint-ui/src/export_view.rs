@@ -51,7 +51,7 @@ enum LowerTab {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SideTab {
+pub enum SideTab {
     Memory,
     HotCue,
     Info,
@@ -66,6 +66,13 @@ pub struct ExportView {
     side_tab: SideTab,
     beat_loop: u32,
     quantize: bool,
+    /// Grid edits on the loaded track, for undo and redo.
+    grid_undo: Vec<cuepoint_core::BeatGrid>,
+    grid_redo: Vec<cuepoint_core::BeatGrid>,
+    /// Recent TAP times, in egui seconds.
+    taps: Vec<f64>,
+    /// The track the undo history belongs to.
+    grid_track: Option<cuepoint_core::TrackId>,
 }
 
 impl Default for ExportView {
@@ -77,6 +84,10 @@ impl Default for ExportView {
             side_tab: SideTab::HotCue,
             beat_loop: 4,
             quantize: true,
+            grid_undo: Vec::new(),
+            grid_redo: Vec::new(),
+            taps: Vec::new(),
+            grid_track: None,
         }
     }
 }
@@ -164,10 +175,10 @@ pub fn top_bar(ui: &mut Ui, rect: Rect, mode: Mode, clock: &str) -> Option<Mode>
     let badge = Rect::from_min_max(pos2(r - 338.0, y + 5.0), pos2(r - 291.0, y + 23.0));
     paint::rounded(&p, badge, 2.0, theme::BADGE_BG);
     paint::text_centred(&p, badge, "Free", theme::bold(12.5), theme::BADGE_TEXT);
-    paint::gear(&p, pos2(r - 251.5, y + 13.5), 7.5, theme::TEXT);
+    paint::gear(&p, pos2(r - 261.0, y + 13.5), 7.5, theme::TEXT);
     paint::arc(
         &p,
-        pos2(r - 230.0, y + 14.0),
+        pos2(r - 224.0, y + 14.0),
         7.0,
         -3.4,
         1.1,
@@ -188,7 +199,7 @@ pub fn top_bar(ui: &mut Ui, rect: Rect, mode: Mode, clock: &str) -> Option<Mode>
     );
     paint::text(
         &p,
-        r - 15.0,
+        r - 26.0,
         y + 9.5,
         Align::Max,
         clock,
@@ -224,12 +235,22 @@ pub fn footer(ui: &mut Ui, rect: Rect, summary: &str) {
         rect.top() + 12.0,
         Align::Max,
         summary,
-        theme::bold(theme::BODY_SIZE),
+        theme::bold(11.6),
         theme::TEXT_DIM,
     );
 }
 
 impl ExportView {
+    /// Opens a tab of the cue side panel.
+    pub fn show_side_tab(&mut self, tab: SideTab) {
+        self.side_tab = tab;
+    }
+
+    /// Opens the GRID tab under the player.
+    pub fn show_grid_edit(&mut self) {
+        self.lower_tab = LowerTab::Grid;
+    }
+
     /// Draws the player band (left buttons, waveforms, side panel).
     #[allow(clippy::too_many_arguments)] // one deck's view, state and outputs
     pub fn player(
@@ -370,11 +391,8 @@ impl ExportView {
                 );
             }
         } else {
-            let glyph = if state.loaded {
-                theme::TEXT
-            } else {
-                theme::PLAY_GLYPH
-            };
+            // rekordbox keeps the glyph grey while paused.
+            let glyph = theme::PLAY_GLYPH;
             paint::play_triangle(&p, play_centre + vec2(1.5, 0.0), 11.0, true, glyph);
         }
         if click(
@@ -838,7 +856,7 @@ impl ExportView {
         &mut self,
         ui: &Ui,
         main: Rect,
-        deck: &DeckView,
+        deck: &mut DeckView,
         state: &DeckState,
         sample_rate: u32,
         commands: &mut Vec<Command>,
@@ -883,23 +901,68 @@ impl ExportView {
                 self.lower_tab = tab;
             }
         }
+        let row = y + 10.0;
+        match self.lower_tab {
+            LowerTab::CueLoop => {
+                self.cue_loop_controls(ui, &p, strip, deck, state, sample_rate, commands)
+            }
+            LowerTab::Grid => {
+                self.grid_edit_controls(ui, &p, strip, deck, state, sample_rate, commands)
+            }
+        }
+        let small = |p: &egui::Painter, rect: Rect| paint::rounded(p, rect, 2.0, theme::BUTTON);
+        // Quantize and the menu, anchored to the right edge.
+        let q = Rect::from_min_size(pos2(strip.right() - 94.0, row + 4.0), vec2(33.0, 19.5));
+        if self.quantize {
+            paint::rounded(&p, q, 2.0, theme::ACCENT);
+        } else {
+            paint::outline(&p, q, 2.0, theme::OUTLINE);
+        }
+        paint::text_centred(
+            &p,
+            q,
+            "Q",
+            theme::bold(theme::BODY_SIZE * 0.85),
+            theme::TEXT,
+        );
+        if click(ui, q, "quantize").clicked() {
+            self.quantize = !self.quantize;
+        }
+        let menu = Rect::from_min_size(pos2(strip.right() - 50.5, row + 4.0), vec2(20.0, 20.0));
+        small(&p, menu);
+        paint::hamburger(&p, menu.center(), 13.0, theme::TEXT);
+    }
+
+    /// CUE/LOOP: hot cue pads, memory cue navigation and beat loops.
+    #[allow(clippy::too_many_arguments)]
+    fn cue_loop_controls(
+        &mut self,
+        ui: &Ui,
+        p: &egui::Painter,
+        strip: Rect,
+        deck: &DeckView,
+        state: &DeckState,
+        sample_rate: u32,
+        commands: &mut Vec<Command>,
+    ) {
+        let (x, y) = (strip.left(), strip.top());
+        let row = y + 10.0;
         // The control group is centred between the tabs and the right edge;
         // in a 1220 pt player it starts 244 pt after the tabs.
         let group_width = 649.0;
         let gx = ((x + 83.0 + strip.right()) / 2.0 - group_width / 2.0).round();
-        let row = y + 10.0;
         let rate = f64::from(sample_rate.max(1));
         let cues: &[Cue] = deck.loaded.as_ref().map_or(&[], |l| &l.track.cues);
         for (i, letter) in ["A", "B", "C", "D", "E", "F", "G", "H"].iter().enumerate() {
             let b = Rect::from_min_size(pos2(gx + i as f32 * 33.0, row), vec2(28.0, 28.0));
-            paint::rounded(&p, b, 2.0, theme::BUTTON_DARK);
+            paint::rounded(p, b, 2.0, theme::BUTTON_DARK);
             let cue = cues.iter().find(|c| c.hot_cue == Some(i as u8));
             if let Some(cue) = cue {
                 let square = Rect::from_center_size(b.center(), vec2(15.0, 15.0));
-                paint::fill(&p, square, theme::cue_colour(cue));
-                paint::text_centred(&p, square, letter, theme::regular(12.5), theme::CUE_LETTER);
+                paint::fill(p, square, theme::cue_colour(cue));
+                paint::text_centred(p, square, letter, theme::regular(12.5), theme::CUE_LETTER);
             } else {
-                paint::text_centred(&p, b, letter, theme::regular(12.5), theme::TEXT_OFF);
+                paint::text_centred(p, b, letter, theme::regular(12.5), theme::TEXT_OFF);
             }
             if let Some(cue) = cue
                 && click(ui, b, ("hot_cue", i)).clicked()
@@ -919,9 +982,9 @@ impl ExportView {
         let mut bx = gx + 289.0;
         let small = |p: &egui::Painter, rect: Rect| paint::rounded(p, rect, 2.0, theme::BUTTON);
         let memory = Rect::from_min_size(pos2(bx, row + 4.0), vec2(60.0, 20.0));
-        small(&p, memory);
+        small(p, memory);
         paint::text_centred(
-            &p,
+            p,
             memory,
             "MEMORY",
             theme::bold(theme::BODY_SIZE * 0.85),
@@ -930,7 +993,7 @@ impl ExportView {
         bx += 64.0;
         for (i, glyph) in ["prev", "next", "delete"].iter().enumerate() {
             let b = Rect::from_min_size(pos2(bx + i as f32 * 25.5, row + 4.0), vec2(20.0, 20.0));
-            small(&p, b);
+            small(p, b);
             if click(ui, b, ("memory", i)).clicked() {
                 let target = match *glyph {
                     "prev" => memory_cues
@@ -953,25 +1016,25 @@ impl ExportView {
                 }
             }
             match *glyph {
-                "prev" => paint::play_triangle(&p, b.center(), 9.0, false, theme::TEXT),
-                "next" => paint::play_triangle(&p, b.center(), 9.0, true, theme::TEXT),
-                _ => paint::cross(&p, b.center(), 9.0, 1.4, theme::TEXT),
+                "prev" => paint::play_triangle(p, b.center(), 9.0, false, theme::TEXT),
+                "next" => paint::play_triangle(p, b.center(), 9.0, true, theme::TEXT),
+                _ => paint::cross(p, b.center(), 9.0, 1.4, theme::TEXT),
             }
         }
         bx += 101.0;
         let au = Rect::from_min_size(pos2(bx, row + 4.0), vec2(36.5, 20.0));
-        paint::rounded(&p, au, 2.0, theme::ACCENT);
+        paint::rounded(p, au, 2.0, theme::ACCENT);
         paint::text_centred(
-            &p,
+            p,
             au,
             "AU",
             theme::bold(theme::BODY_SIZE * 0.85),
             theme::TEXT,
         );
         let ma = Rect::from_min_size(pos2(bx + 39.5, row + 4.0), vec2(36.5, 20.0));
-        paint::outline(&p, ma, 2.0, theme::OUTLINE);
+        paint::outline(p, ma, 2.0, theme::OUTLINE);
         paint::text_centred(
-            &p,
+            p,
             ma,
             "MA",
             theme::bold(theme::BODY_SIZE * 0.85),
@@ -981,13 +1044,13 @@ impl ExportView {
         let prev = Rect::from_min_size(pos2(bx, row + 4.0), vec2(20.0, 20.0));
         let field = Rect::from_min_size(pos2(bx + 22.0, row + 4.0), vec2(70.0, 20.0));
         let next = Rect::from_min_size(pos2(bx + 94.0, row + 4.0), vec2(20.0, 20.0));
-        small(&p, prev);
-        small(&p, field);
-        small(&p, next);
-        paint::chevron_side(&p, prev.center(), 10.0, false, theme::TEXT);
-        paint::chevron_side(&p, next.center(), 10.0, true, theme::TEXT);
+        small(p, prev);
+        small(p, field);
+        small(p, next);
+        paint::chevron_side(p, prev.center(), 10.0, false, theme::TEXT);
+        paint::chevron_side(p, next.center(), 10.0, true, theme::TEXT);
         paint::text_centred(
-            &p,
+            p,
             field,
             &self.beat_loop.to_string(),
             theme::regular(12.5),
@@ -999,26 +1062,329 @@ impl ExportView {
         if click(ui, next, "loop_longer").clicked() && self.beat_loop < 512 {
             self.beat_loop *= 2;
         }
-        // Quantize and the menu, anchored to the right edge.
-        let q = Rect::from_min_size(pos2(strip.right() - 94.0, row + 4.0), vec2(33.0, 19.5));
-        if self.quantize {
-            paint::rounded(&p, q, 2.0, theme::ACCENT);
-        } else {
-            paint::outline(&p, q, 2.0, theme::OUTLINE);
+    }
+
+    /// GRID EDIT: tempo, tap, grid shift and stretch, tempo doubling and
+    /// halving, undo and redo. PHRASE EDIT is shown but not implemented.
+    #[allow(clippy::too_many_arguments)]
+    fn grid_edit_controls(
+        &mut self,
+        ui: &Ui,
+        p: &egui::Painter,
+        strip: Rect,
+        deck: &mut DeckView,
+        state: &DeckState,
+        sample_rate: u32,
+        commands: &mut Vec<Command>,
+    ) {
+        let (x, y) = (strip.left(), strip.top());
+        let track = deck.loaded.as_ref().map(|l| l.track.id.clone());
+        if track != self.grid_track {
+            self.grid_undo.clear();
+            self.grid_redo.clear();
+            self.taps.clear();
+            self.grid_track = track;
         }
-        paint::text_centred(
-            &p,
-            q,
-            "Q",
-            theme::bold(theme::BODY_SIZE * 0.85),
+        // Positions in a 1220 pt player, from x 173 (window) onwards.
+        let gx = x + 93.0;
+        let label = theme::bold(theme::BODY_SIZE * 0.85);
+        paint::text(
+            p,
+            gx,
+            y + 3.0,
+            Align::Min,
+            "GRID EDIT",
+            label.clone(),
             theme::TEXT,
         );
-        if click(ui, q, "quantize").clicked() {
-            self.quantize = !self.quantize;
+        let row = y + 12.0;
+        let button = |dx: f32, w: f32| Rect::from_min_size(pos2(gx + dx, row), vec2(w, 24.0));
+        let rate = f64::from(sample_rate.max(1));
+        let now = state.position / rate;
+        let grid = deck.loaded.as_ref().map(|l| l.grid.clone());
+        let has_grid = grid.as_ref().is_some_and(|g| !g.is_empty());
+        let mut edit: Option<cuepoint_core::BeatGrid> = None;
+
+        // Downbeat marker button.
+        let marker = button(0.0, 24.0);
+        paint::rounded(p, marker, 2.0, theme::BUTTON);
+        paint::fill(
+            p,
+            Rect::from_min_size(marker.center() + vec2(-1.0, -6.0), vec2(2.0, 4.0)),
+            theme::TEXT,
+        );
+        paint::fill(
+            p,
+            Rect::from_min_size(marker.center() + vec2(-1.0, -2.0), vec2(2.0, 8.0)),
+            theme::BAR_LINE,
+        );
+        // Tempo field and TAP.
+        let field = button(34.0, 50.0);
+        paint::rounded(p, field, 2.0, theme::BUTTON_DARK);
+        let bpm = grid
+            .as_ref()
+            .and_then(|g| g.bpm_at(now))
+            .map_or("--.--".to_owned(), |b| format!("{b:.2}"));
+        paint::text(
+            p,
+            field.right() - 9.0,
+            row + 7.5,
+            Align::Max,
+            &bpm,
+            theme::regular(12.0),
+            theme::TEXT,
+        );
+        let tap = button(88.0, 22.0);
+        paint::text_centred(
+            p,
+            tap,
+            "TAP",
+            theme::bold(theme::BODY_SIZE),
+            theme::TEXT_OFF,
+        );
+        if has_grid && click(ui, tap, "grid_tap").clicked() {
+            let t = ui.input(|i| i.time);
+            if self.taps.last().is_some_and(|&last| t - last > 2.0) {
+                self.taps.clear();
+            }
+            self.taps.push(t);
+            if self.taps.len() >= 4 {
+                let span = self.taps[self.taps.len() - 1] - self.taps[0];
+                let tapped = 60.0 * (self.taps.len() - 1) as f64 / span;
+                edit = grid
+                    .as_ref()
+                    .map(|g| g.with_constant_tempo((tapped * 100.0).round() / 100.0));
+            }
         }
-        let menu = Rect::from_min_size(pos2(strip.right() - 50.5, row + 4.0), vec2(20.0, 20.0));
-        small(&p, menu);
-        paint::hamburger(&p, menu.center(), 13.0, theme::TEXT);
+        // Shift, stretch, double and halve.
+        let tools: [(f32, &str); 8] = [
+            (123.0, "shift_left"),
+            (152.0, "shift_right"),
+            (186.0, "widen"),
+            (215.0, "narrow"),
+            (249.0, "double"),
+            (278.0, "halve"),
+            (307.0, "unused_a"),
+            (341.0, "unused_b"),
+        ];
+        for (dx, name) in tools {
+            let b = button(dx, 24.0);
+            paint::rounded(p, b, 2.0, theme::BUTTON);
+            let c = b.center();
+            let enabled = has_grid && !name.starts_with("unused");
+            let colour = if enabled {
+                theme::TEXT
+            } else {
+                theme::TEXT_OFF
+            };
+            let bars = |p: &egui::Painter, centre: egui::Pos2, colour| {
+                for dx in [-2.5, 0.0, 2.5] {
+                    paint::line(
+                        p,
+                        centre + vec2(dx, -5.0),
+                        centre + vec2(dx, 5.0),
+                        1.0,
+                        theme::TEXT_DIM,
+                    );
+                }
+                let _ = colour;
+            };
+            match name {
+                "shift_left" => {
+                    paint::play_triangle(p, c + vec2(-6.0, 0.0), 6.0, false, colour);
+                    bars(p, c + vec2(2.0, 0.0), colour);
+                }
+                "shift_right" => {
+                    bars(p, c + vec2(-2.0, 0.0), colour);
+                    paint::play_triangle(p, c + vec2(6.0, 0.0), 6.0, true, colour);
+                }
+                "widen" => {
+                    paint::play_triangle(p, c + vec2(-7.0, 0.0), 6.0, false, colour);
+                    bars(p, c, colour);
+                    paint::play_triangle(p, c + vec2(7.0, 0.0), 6.0, true, colour);
+                }
+                "narrow" => {
+                    paint::play_triangle(p, c + vec2(-7.0, 0.0), 6.0, true, colour);
+                    bars(p, c, colour);
+                    paint::play_triangle(p, c + vec2(7.0, 0.0), 6.0, false, colour);
+                }
+                "double" => {
+                    bars(p, c + vec2(-5.0, 0.0), colour);
+                    paint::text(
+                        p,
+                        c.x + 0.5,
+                        c.y - 3.5,
+                        Align::Min,
+                        "x2",
+                        theme::bold(10.0),
+                        colour,
+                    );
+                }
+                "halve" => {
+                    bars(p, c + vec2(-6.5, 0.0), colour);
+                    paint::text(
+                        p,
+                        c.x - 2.5,
+                        c.y - 3.0,
+                        Align::Min,
+                        "x",
+                        theme::bold(11.0),
+                        colour,
+                    );
+                    let fx = c.x + 7.0;
+                    paint::text(
+                        p,
+                        fx,
+                        c.y - 8.5,
+                        Align::Center,
+                        "1",
+                        theme::bold(8.0),
+                        colour,
+                    );
+                    paint::line(p, pos2(fx - 3.0, c.y), pos2(fx + 3.0, c.y), 1.0, colour);
+                    paint::text(
+                        p,
+                        fx,
+                        c.y + 2.0,
+                        Align::Center,
+                        "2",
+                        theme::bold(8.0),
+                        colour,
+                    );
+                }
+                _ => bars(p, c, colour),
+            }
+            if enabled && click(ui, b, ("grid_tool", name)).clicked() {
+                // One waveform point (1/150 s) per shift; half a
+                // millisecond per beat per stretch.
+                edit = grid.as_ref().map(|g| match name {
+                    "shift_left" => g.shifted(-1.0 / 150.0),
+                    "shift_right" => g.shifted(1.0 / 150.0),
+                    "narrow" => g.stretched(-0.0005),
+                    "widen" => g.stretched(0.0005),
+                    "double" => g.tempo_scaled(2.0),
+                    _ => g.tempo_scaled(0.5),
+                });
+            }
+        }
+        // Undo and redo.
+        let undo = button(376.0, 20.0);
+        let redo = button(405.0, 20.0);
+        let undo_on = !self.grid_undo.is_empty();
+        let redo_on = !self.grid_redo.is_empty();
+        paint::curved_arrow(
+            p,
+            undo.center(),
+            true,
+            if undo_on {
+                theme::TEXT
+            } else {
+                theme::TEXT_OFF
+            },
+        );
+        paint::curved_arrow(
+            p,
+            redo.center(),
+            false,
+            if redo_on {
+                theme::TEXT
+            } else {
+                theme::TEXT_OFF
+            },
+        );
+        if undo_on
+            && click(ui, undo, "grid_undo").clicked()
+            && let (Some(previous), Some(current)) = (self.grid_undo.pop(), grid.clone())
+        {
+            self.grid_redo.push(current);
+            self.apply_grid(deck, previous, commands);
+        } else if redo_on
+            && click(ui, redo, "grid_redo").clicked()
+            && let (Some(next), Some(current)) = (self.grid_redo.pop(), grid.clone())
+        {
+            self.grid_undo.push(current);
+            self.apply_grid(deck, next, commands);
+        }
+        // Metronome, click and analysis lock buttons.
+        for (dx, kind) in [(431.5, 0), (460.5, 1), (489.5, 2)] {
+            let b = button(dx, 24.0);
+            paint::rounded(p, b, 2.0, theme::BUTTON);
+            let c = b.center();
+            match kind {
+                0 => {
+                    paint::outline(
+                        p,
+                        Rect::from_center_size(c, vec2(9.0, 12.0)),
+                        1.0,
+                        theme::TEXT,
+                    );
+                    paint::line(
+                        p,
+                        c + vec2(-3.0, -5.0),
+                        c + vec2(3.0, 5.0),
+                        1.4,
+                        theme::TEXT,
+                    );
+                }
+                1 => {
+                    paint::fill(
+                        p,
+                        Rect::from_center_size(c + vec2(-3.0, 1.0), vec2(1.5, 5.0)),
+                        theme::ACCENT,
+                    );
+                    paint::fill(
+                        p,
+                        Rect::from_center_size(c + vec2(0.0, 0.0), vec2(1.5, 8.0)),
+                        theme::ACCENT,
+                    );
+                    paint::fill(
+                        p,
+                        Rect::from_center_size(c + vec2(3.0, 0.0), vec2(1.5, 12.0)),
+                        theme::TEXT,
+                    );
+                }
+                _ => paint::open_lock(p, c + vec2(0.0, 1.0), theme::TEXT),
+            }
+        }
+        // Phrase editing, shown disabled.
+        let px = x + 800.0;
+        paint::text(
+            p,
+            px,
+            y + 3.0,
+            Align::Min,
+            "PHRASE EDIT",
+            label.clone(),
+            theme::TEXT_DIM,
+        );
+        let cut = Rect::from_min_size(pos2(px, row), vec2(50.0, 24.0));
+        let clear = Rect::from_min_size(pos2(px + 67.0, row), vec2(50.0, 24.0));
+        for (b, text) in [(cut, "CUT"), (clear, "CLEAR")] {
+            paint::rounded(p, b, 2.0, theme::PHRASE_BUTTON);
+            paint::text_centred(p, b, text, label.clone(), theme::TEXT_OFF);
+        }
+
+        if let (Some(new), Some(current)) = (edit, grid) {
+            self.grid_undo.push(current);
+            self.grid_redo.clear();
+            self.apply_grid(deck, new, commands);
+        }
+    }
+
+    /// Puts `grid` on the loaded track and the engine's deck.
+    fn apply_grid(
+        &mut self,
+        deck: &mut DeckView,
+        grid: cuepoint_core::BeatGrid,
+        commands: &mut Vec<Command>,
+    ) {
+        if let Some(loaded) = &mut deck.loaded {
+            loaded.grid = grid.clone();
+            commands.push(Command::SetGrid {
+                deck: deck.index,
+                grid: Some(std::sync::Arc::new(grid)),
+            });
+        }
     }
 
     fn side_panel(
@@ -1077,36 +1443,68 @@ impl ExportView {
             );
         };
         let memory: Vec<&Cue> = cues.iter().filter(|c| c.hot_cue.is_none()).collect();
-        for i in 0..8 {
-            let row = Rect::from_min_size(
-                pos2(list.left(), list.top() + i as f32 * 27.0),
-                vec2(list.width(), 26.0),
-            );
-            paint::fill(&p, row, theme::BAR);
-            match self.side_tab {
-                SideTab::HotCue => {
+        match self.side_tab {
+            // Eight 26 pt rows, A to H.
+            SideTab::HotCue => {
+                for i in 0..8 {
+                    let row = Rect::from_min_size(
+                        pos2(list.left(), list.top() + i as f32 * 27.0),
+                        vec2(list.width(), 26.0),
+                    );
+                    paint::fill(&p, row, theme::BAR);
                     let letter = char::from(b'A' + i as u8);
                     match cues.iter().find(|c| c.hot_cue == Some(i as u8)) {
                         Some(cue) => entry(&p, row, cue, Some(letter)),
                         None => {
+                            let text = letter.to_string();
+                            let font = theme::regular(theme::BODY_SIZE);
                             paint::text(
                                 &p,
                                 row.left() + 13.0,
                                 row.top() + 10.0,
                                 Align::Min,
-                                &letter.to_string(),
-                                theme::regular(theme::BODY_SIZE),
+                                &text,
+                                font,
                                 theme::TEXT_OFF,
                             );
                         }
                     }
                 }
-                SideTab::Memory => {
-                    if let Some(cue) = memory.get(i) {
-                        entry(&p, row, cue, None);
+            }
+            // Ten 21 pt rows of memory cues, each with its delete cross.
+            SideTab::Memory => {
+                for i in 0..10 {
+                    let row = Rect::from_min_size(
+                        pos2(list.left(), y + 6.0 + i as f32 * 22.0),
+                        vec2(list.width(), 21.0),
+                    );
+                    paint::fill(&p, row, theme::BAR);
+                    match memory.get(i) {
+                        Some(cue) => memory_entry(&p, row, cue),
+                        None => paint::cross(
+                            &p,
+                            pos2(row.right() - 10.0, row.center().y),
+                            7.0,
+                            1.0,
+                            theme::TEXT_OFF,
+                        ),
                     }
                 }
-                SideTab::Info => {}
+            }
+            SideTab::Info => {
+                if let Some(loaded) = &deck.loaded {
+                    let area = Rect::from_min_max(
+                        pos2(list.left(), y + 6.0),
+                        pos2(list.right(), y + 225.0),
+                    );
+                    paint::fill(&p, area, theme::BAR);
+                    info_panel(&p, area, &loaded.track);
+                    let bar = Rect::from_min_max(
+                        pos2(area.right() - 4.0, area.top()),
+                        pos2(area.right() - 1.5, area.bottom() - 25.0),
+                    );
+                    paint::rounded(&p, bar, 1.0, theme::BEAT_LINE);
+                }
             }
         }
         let _ = (state, sample_rate);
@@ -1133,6 +1531,110 @@ impl ExportView {
                 self.side_tab = tab;
             }
         }
+    }
+}
+
+/// A memory cue row: orange marker, time and label.
+fn memory_entry(p: &egui::Painter, row: Rect, cue: &Cue) {
+    let c = pos2(row.left() + 15.5, row.center().y);
+    paint::triangle(
+        p,
+        [c + vec2(0.0, -4.0), c + vec2(-5.0, 4.0), c + vec2(5.0, 4.0)],
+        theme::CUE_ORANGE,
+    );
+    let (whole, _) = clock(cue.start);
+    let font = theme::regular(theme::BODY_SIZE);
+    paint::text(
+        p,
+        row.left() + 31.5,
+        row.top() + 7.0,
+        Align::Min,
+        &whole,
+        font.clone(),
+        theme::TEXT,
+    );
+    paint::text_clipped(
+        p,
+        row.left() + 67.0,
+        row.top() + 7.0,
+        row.width() - 95.0,
+        Align::Min,
+        &cue.name,
+        font,
+        theme::TEXT,
+    );
+    paint::cross(
+        p,
+        pos2(row.right() - 10.0, row.center().y),
+        8.0,
+        1.3,
+        theme::TEXT,
+    );
+}
+
+/// INFO: rating, comment and file details of the loaded track.
+fn info_panel(p: &egui::Painter, area: Rect, track: &cuepoint_core::Track) {
+    let (x, y) = (area.left() + 10.0, area.top() - 6.0);
+    for i in 0..5u8 {
+        let c = pos2(x + 5.75 + f32::from(i) * 16.0, y + 21.5);
+        if i < track.rating.stars() {
+            paint::star(p, c, 5.5, theme::TEXT);
+        } else {
+            paint::star(p, c, 6.0, theme::STAR_OFF);
+            paint::star(p, c, 5.0, theme::BAR);
+        }
+    }
+    for (sy, right) in [(37.5, 170.0), (68.5, 170.0), (116.5, 162.0)] {
+        paint::fill(
+            p,
+            Rect::from_min_size(pos2(x, y + sy), vec2(right, 1.0)),
+            theme::SEPARATOR,
+        );
+    }
+    // Comment bubble and text.
+    let bubble = Rect::from_min_size(pos2(x, y + 78.0), vec2(12.0, 7.5));
+    paint::rounded(p, bubble, 2.0, theme::TEXT_DIM);
+    paint::triangle(
+        p,
+        [
+            bubble.left_bottom() + vec2(2.0, 0.0),
+            bubble.left_bottom() + vec2(6.0, 0.0),
+            bubble.left_bottom() + vec2(2.0, 3.0),
+        ],
+        theme::TEXT_DIM,
+    );
+    let font = theme::regular(theme::BODY_SIZE);
+    paint::text_clipped(
+        p,
+        x,
+        y + 97.5,
+        area.width() - 20.0,
+        Align::Min,
+        &track.comment,
+        font.clone(),
+        theme::TEXT_DIM,
+    );
+    let size = track
+        .file_size
+        .map(|b| format!("{:.1} MB", b as f64 / 1_048_576.0));
+    let rate = track.sample_rate.map(|r| format!("{r}Hz"));
+    let bits = track.bit_rate.map(|b| format!("{b}kbps"));
+    let lines = [
+        Some(track.kind.clone()).filter(|k| !k.is_empty()),
+        size,
+        rate,
+        bits,
+    ];
+    for (i, line) in lines.iter().flatten().enumerate() {
+        paint::text(
+            p,
+            x,
+            y + 130.0 + i as f32 * 16.0,
+            Align::Min,
+            line,
+            font.clone(),
+            theme::TEXT_DIM,
+        );
     }
 }
 

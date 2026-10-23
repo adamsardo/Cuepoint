@@ -185,6 +185,11 @@ impl Browser {
         self.generation += 1;
     }
 
+    /// Highlights `track` (an index into `Library::tracks`).
+    pub fn select_track(&mut self, track: usize) {
+        self.selected = Some(track);
+    }
+
     /// Shows the first playlist named `name`; false if there is none.
     pub fn select_playlist_named(&mut self, library: &Library, name: &str) -> bool {
         fn find<'a>(nodes: &'a [PlaylistNode], name: &str) -> Option<&'a PlaylistNode> {
@@ -376,6 +381,70 @@ impl Browser {
         let b = Rect::from_min_size(pos2(rect.left() + 4.0, rect.top() + 3.0), vec2(17.0, 20.0));
         paint::rounded(&p, b, 1.0, theme::BUTTON);
         paint::list_icon(&p, b.shrink2(vec2(1.0, 3.0)), true, theme::TEXT);
+        // Sub-panel toggles: tags, related tracks, explorer, info, layout.
+        for i in 0..5 {
+            let c = pos2(rect.left() + 12.0, rect.top() + 181.5 + i as f32 * 42.0);
+            let icon = Rect::from_center_size(c, vec2(17.0, 17.0));
+            paint::rounded(&p, icon, 2.0, theme::BUTTON);
+            paint::outline(&p, icon, 2.0, theme::BORDER);
+            match i {
+                0 => {
+                    // A tag with its hole.
+                    let tag = [
+                        c + vec2(-4.5, 4.5),
+                        c + vec2(-4.5, 0.5),
+                        c + vec2(0.5, -4.5),
+                        c + vec2(4.5, -4.5),
+                        c + vec2(4.5, -0.5),
+                        c + vec2(-0.5, 4.5),
+                    ];
+                    p.add(egui::Shape::convex_polygon(
+                        tag.to_vec(),
+                        theme::TEXT,
+                        egui::Stroke::NONE,
+                    ));
+                    p.circle_filled(c + vec2(2.2, -2.2), 1.0, theme::BUTTON);
+                }
+                1 => {
+                    paint::line(
+                        &p,
+                        c + vec2(-3.5, 3.5),
+                        c + vec2(3.5, -3.5),
+                        1.5,
+                        theme::TEXT,
+                    );
+                    p.circle_filled(c + vec2(-3.5, 3.5), 2.0, theme::TEXT);
+                    p.circle_filled(c + vec2(3.5, -3.5), 2.0, theme::TEXT);
+                }
+                2 => {
+                    paint::folder(&p, Rect::from_center_size(c, vec2(12.0, 10.0)), theme::TEXT);
+                    for a in [0.0f32, 1.047, 2.094] {
+                        let d = egui::Vec2::angled(a) * 3.5;
+                        paint::line(
+                            &p,
+                            c + vec2(0.0, 1.0) - d,
+                            c + vec2(0.0, 1.0) + d,
+                            1.0,
+                            theme::BUTTON,
+                        );
+                    }
+                }
+                3 => paint::info(&p, c, theme::TEXT, theme::BUTTON),
+                _ => {
+                    paint::outline(
+                        &p,
+                        Rect::from_center_size(c, vec2(11.0, 9.0)),
+                        0.0,
+                        theme::TEXT,
+                    );
+                    paint::fill(
+                        &p,
+                        Rect::from_min_size(c + vec2(-5.5, -4.5), vec2(5.5, 9.0)),
+                        theme::TEXT,
+                    );
+                }
+            }
+        }
     }
 
     fn tree(&mut self, ui: &mut Ui, rect: Rect, library: &Library) {
@@ -996,15 +1065,14 @@ impl Browser {
         // Horizontal scrollbar strip at the bottom.
         let bottom = Rect::from_min_max(pos2(x, rect.bottom() - 12.0), rect.max);
         paint::fill(&p, bottom, theme::BLACK);
-        paint::rounded(
-            &p,
-            Rect::from_min_max(
-                pos2(x + 1.0, bottom.top() + 2.0),
-                pos2(list_right - 1.0, bottom.top() + 8.0),
-            ),
-            3.0,
-            theme::TAB_OFF,
+        // rekordbox's default columns run past the view, so its thumb stops
+        // short of the end.
+        let thumb_right = x + (list_right - x) * 0.84;
+        let thumb = Rect::from_min_max(
+            pos2(x + 1.0, bottom.top() + 2.0),
+            pos2(thumb_right, bottom.top() + 8.0),
         );
+        paint::rounded(&p, thumb, 3.0, theme::TAB_OFF);
         action
     }
 }

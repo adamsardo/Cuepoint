@@ -156,9 +156,73 @@ impl BeatGrid {
     }
 }
 
+/// Grid edits, as the GRID EDIT panel applies them. Each returns a new
+/// grid and leaves an empty grid empty.
+impl BeatGrid {
+    /// Every marker moved by `seconds` (positive is later).
+    pub fn shifted(&self, seconds: f64) -> Self {
+        self.map_markers(|m| TempoMarker {
+            time: m.time + seconds,
+            ..m
+        })
+    }
+
+    /// Every tempo multiplied by `factor` (2.0 doubles, 0.5 halves); the
+    /// markers stay where they are.
+    pub fn tempo_scaled(&self, factor: f64) -> Self {
+        self.map_markers(|m| TempoMarker {
+            bpm: m.bpm * factor,
+            ..m
+        })
+    }
+
+    /// Each beat lengthened by `seconds` (negative shortens), keeping the
+    /// first marker in place: the grid widens or narrows.
+    pub fn stretched(&self, seconds: f64) -> Self {
+        let Some(first) = self.markers.first().copied() else {
+            return self.clone();
+        };
+        let beat = |bpm: f64| 60.0 / bpm;
+        let scale = (beat(first.bpm) + seconds) / beat(first.bpm);
+        self.map_markers(|m| TempoMarker {
+            time: first.time + (m.time - first.time) * scale,
+            bpm: 60.0 / (beat(m.bpm) + seconds),
+            ..m
+        })
+    }
+
+    /// A constant grid at `bpm` that keeps this grid's first beat.
+    pub fn with_constant_tempo(&self, bpm: f64) -> Self {
+        match self.markers.first() {
+            Some(first) if bpm > 0.0 => Self::constant(bpm, first.time, first.beat_in_bar),
+            _ => self.clone(),
+        }
+    }
+
+    fn map_markers(&self, f: impl Fn(TempoMarker) -> TempoMarker) -> Self {
+        Self::from_markers(self.markers.iter().copied().map(f).collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grid_edits() {
+        let grid = BeatGrid::constant(120.0, 0.25, 1);
+        assert_eq!(grid.shifted(0.01).markers()[0].time, 0.26);
+        assert_eq!(grid.tempo_scaled(2.0).markers()[0].bpm, 240.0);
+        let wide = grid.stretched(0.01);
+        assert!((wide.markers()[0].bpm - 60.0 / 0.51).abs() < 1e-9);
+        assert_eq!(wide.markers()[0].time, 0.25);
+        let tapped = grid.with_constant_tempo(126.0);
+        assert_eq!(
+            (tapped.markers()[0].time, tapped.markers()[0].bpm),
+            (0.25, 126.0)
+        );
+        assert!(BeatGrid::default().shifted(1.0).is_empty());
+    }
 
     #[test]
     fn constant_grid_maps_time_and_beats() {

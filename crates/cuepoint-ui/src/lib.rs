@@ -14,7 +14,8 @@ pub use artwork::ArtworkCache;
 pub use browser::{Browser, BrowserAction, Source};
 pub use deck::{DeckView, LoadedTrack};
 pub use export_view::{
-    DIVIDER, ExportView, FOOTER, Mode, PLAYER, TITLE_BAR, TOP_BAR, footer, title_bar, top_bar,
+    DIVIDER, ExportView, FOOTER, Mode, PLAYER, SideTab, TITLE_BAR, TOP_BAR, footer, title_bar,
+    top_bar,
 };
 pub use mixer::MixerView;
 pub use preview::{PREVIEW_BINS, Preview, PreviewCache, PreviewWorker, preview_from_bands};
