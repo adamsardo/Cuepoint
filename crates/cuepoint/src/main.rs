@@ -38,7 +38,8 @@ fn main() -> eframe::Result {
             .with_min_inner_size([1024.0, 628.0])
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
-            .with_title_shown(false),
+            .with_title_shown(false)
+            .with_titlebar_buttons_shown(false),
         ..Default::default()
     };
     eframe::run_native(

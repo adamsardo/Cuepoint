@@ -97,8 +97,9 @@ fn click(ui: &Ui, rect: Rect, id: impl std::hash::Hash + std::fmt::Debug) -> egu
     ui.interact(rect, ui.scope_id().with(("export", id)), Sense::click())
 }
 
-/// The window title bar: drag to move, double-click to zoom. The traffic
-/// lights are the system's, drawn over it.
+/// The window title bar: drag to move, double-click to zoom, with
+/// classic 12 pt traffic lights (the system's are hidden, since newer
+/// macOS draws larger ones than rekordbox's).
 pub fn title_bar(ui: &mut Ui, rect: Rect, title: &str) {
     let p = ui.painter_at(rect);
     paint::fill(&p, rect, theme::TITLE_BAR);
@@ -116,11 +117,73 @@ pub fn title_bar(ui: &mut Ui, rect: Rect, title: &str) {
         ui.scope_id().with("title_bar"),
         Sense::click_and_drag(),
     );
+    let focused = ui.input(|i| i.viewport().focused.unwrap_or(true));
+    let lights = Rect::from_min_size(rect.min + vec2(7.0, 5.0), vec2(57.0, 18.0));
+    let hovered = ui.rect_contains_pointer(lights);
+    let mut clicked_light = false;
+    for (i, colour) in [theme::LIGHT_CLOSE, theme::LIGHT_MINIMISE, theme::LIGHT_ZOOM]
+        .into_iter()
+        .enumerate()
+    {
+        let c = rect.min + vec2(15.75 + i as f32 * 20.0, 13.75);
+        let fill = if focused || hovered {
+            colour
+        } else {
+            theme::LIGHT_INACTIVE
+        };
+        p.circle_filled(c, 6.0, fill);
+        if hovered {
+            let mark = theme::LIGHT_MARK[i];
+            match i {
+                0 => paint::cross(&p, c, 5.0, 1.2, mark),
+                1 => paint::line(&p, c + vec2(-3.0, 0.0), c + vec2(3.0, 0.0), 1.2, mark),
+                _ => {
+                    paint::triangle(
+                        &p,
+                        [
+                            c + vec2(-3.0, -3.0),
+                            c + vec2(1.0, -3.0),
+                            c + vec2(-3.0, 1.0),
+                        ],
+                        mark,
+                    );
+                    paint::triangle(
+                        &p,
+                        [c + vec2(3.0, 3.0), c + vec2(-1.0, 3.0), c + vec2(3.0, -1.0)],
+                        mark,
+                    );
+                }
+            }
+        }
+        let button = Rect::from_center_size(c, vec2(14.0, 14.0));
+        if ui
+            .interact(
+                button,
+                ui.scope_id().with(("traffic_light", i)),
+                Sense::click(),
+            )
+            .clicked()
+        {
+            clicked_light = true;
+            let command = match i {
+                0 => egui::ViewportCommand::Close,
+                1 => egui::ViewportCommand::Minimized(true),
+                _ => {
+                    let fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                    egui::ViewportCommand::Fullscreen(!fullscreen)
+                }
+            };
+            ui.ctx().send_viewport_cmd(command);
+        }
+    }
+    if clicked_light {
+        return;
+    }
     if response.double_clicked() {
         let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
         ui.ctx()
             .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-    } else if response.drag_started() {
+    } else if response.drag_started() && !hovered {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
     }
 }

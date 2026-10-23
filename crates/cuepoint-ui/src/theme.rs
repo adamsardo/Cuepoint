@@ -12,6 +12,16 @@ use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId};
 /// Panel and surface colours.
 pub const TITLE_BAR: Color32 = Color32::from_rgb(0x38, 0x38, 0x38);
 pub const TITLE_TEXT: Color32 = Color32::from_rgb(0xb4, 0xb4, 0xb4);
+pub const LIGHT_CLOSE: Color32 = Color32::from_rgb(0xec, 0x6a, 0x5e);
+pub const LIGHT_MINIMISE: Color32 = Color32::from_rgb(0xf4, 0xbf, 0x4f);
+pub const LIGHT_ZOOM: Color32 = Color32::from_rgb(0x61, 0xc5, 0x54);
+pub const LIGHT_INACTIVE: Color32 = Color32::from_rgb(0x55, 0x55, 0x55);
+/// Symbols shown on hover: close, minimise, full screen.
+pub const LIGHT_MARK: [Color32; 3] = [
+    Color32::from_rgb(0x4d, 0x00, 0x00),
+    Color32::from_rgb(0x99, 0x57, 0x00),
+    Color32::from_rgb(0x00, 0x65, 0x00),
+];
 pub const BLACK: Color32 = Color32::from_rgb(0x00, 0x00, 0x00);
 pub const BAR: Color32 = Color32::from_rgb(0x0f, 0x0f, 0x0f);
 pub const PANEL: Color32 = Color32::from_rgb(0x1e, 0x1e, 0x1e);
