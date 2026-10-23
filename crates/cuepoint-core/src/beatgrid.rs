@@ -128,16 +128,20 @@ impl BeatGrid {
     /// Whether whole beat `beat` (as counted by `beat_at`) is a downbeat,
     /// using the bar position of the marker that governs it.
     pub fn is_downbeat(&self, beat: i64) -> bool {
+        self.beat_in_bar(beat) == Some(1)
+    }
+
+    /// Position 1..=4 of whole beat `beat` within its bar, counted from the
+    /// bar position of the marker that governs it.
+    pub fn beat_in_bar(&self, beat: i64) -> Option<u32> {
         let i = self
             .bases
             .partition_point(|&b| b <= beat as f64)
             .saturating_sub(1);
-        let Some(marker) = self.markers.get(i) else {
-            return false;
-        };
+        let marker = self.markers.get(i)?;
         let since_marker = beat - self.bases[i] as i64;
         let bar = i64::from(BEATS_PER_BAR);
-        (since_marker + i64::from(marker.beat_in_bar) - 1).rem_euclid(bar) == 0
+        Some((since_marker + i64::from(marker.beat_in_bar) - 1).rem_euclid(bar) as u32 + 1)
     }
 
     /// Times of every whole beat in `start..end` seconds, with a downbeat
@@ -238,6 +242,12 @@ mod tests {
         assert!(grid.is_downbeat(20));
         assert!(!grid.is_downbeat(21) && !grid.is_downbeat(22));
         assert!(grid.is_downbeat(23));
+        assert_eq!(grid.beat_in_bar(20), Some(1));
+        assert_eq!(
+            grid.beat_in_bar(21),
+            Some(3),
+            "marker keeps its own bar position"
+        );
         // Positions stay monotonic through the shortened beat.
         assert!(grid.beat_at(10.05).unwrap() > 20.0 && grid.beat_at(10.05).unwrap() < 21.0);
     }

@@ -17,7 +17,7 @@
 mod waveform;
 
 use crate::AnalysisInput;
-use cuepoint_core::{BEATS_PER_BAR, BeatGrid};
+use cuepoint_core::BeatGrid;
 use waveform::{
     Peaks, colour_detail_entry, colour_preview_entry, columns, detail_len, detail_peaks,
     mono_entry, tiny_entry,
@@ -254,12 +254,11 @@ impl AnlzWriter {
     }
 }
 
-/// Position of whole beat `index` within its bar, 1 to 4: one more than the
-/// number of beats since the latest downbeat.
+/// Position of whole beat `index` within its bar, 1 to 4, from the tempo
+/// marker that governs it (a marker can reset the bar phase).
 fn beat_in_bar(grid: &BeatGrid, index: i64) -> u16 {
-    (0..i64::from(BEATS_PER_BAR))
-        .find(|&back| grid.is_downbeat(index - back))
-        .map_or(1, |back| back as u16 + 1)
+    grid.beat_in_bar(index)
+        .map_or(1, |position| position as u16)
 }
 
 #[cfg(test)]

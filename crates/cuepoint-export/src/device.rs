@@ -14,6 +14,11 @@ use crate::{AnalysisInput, DeviceLibrary, ExportPlaylist, ExportTrack, anlz, pdb
 
 /// Longest file or folder name most removable file systems accept.
 const MAX_NAME_BYTES: usize = 255;
+/// Longest string `export.pdb` stores, in UTF-16 units; a device path must
+/// fit whole or the track row points at a file that does not exist.
+const MAX_PATH_UNITS: usize = 255;
+/// Artist and album folder names are capped so the file name keeps room.
+const MAX_FOLDER_UNITS: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExportError {
@@ -89,7 +94,9 @@ pub fn write_device(
         let source_len = fs::metadata(&track.source)
             .map_err(io_error(&track.source))?
             .len();
-        let same = fs::metadata(&audio_dest).is_ok_and(|m| m.len() == source_len);
+        // Names depend on export order, so a same-named file may be another
+        // track: only keep it when the bytes match.
+        let same = same_contents(&track.source, &audio_dest).unwrap_or(false);
         if same {
             already_present += 1;
         } else {
@@ -130,9 +137,21 @@ pub fn write_device(
 
 /// `/Contents/<artist>/<album>/<file>` with names made safe for FAT and
 /// exFAT, de-duplicated against paths already used in this export.
+/// The whole path stays within `MAX_PATH_UNITS` UTF-16 units.
 fn unique_device_path(row: &ExportTrack, source: &Path, used: &mut HashSet<String>) -> String {
-    let artist = sanitise(&row.artist).unwrap_or_else(|| "UnknownArtist".into());
-    let album = sanitise(&row.album).unwrap_or_else(|| "UnknownAlbum".into());
+    let folder = |name: &str, fallback: &str| {
+        let name = sanitise(name).unwrap_or_else(|| fallback.into());
+        let short = truncate_units(&name, MAX_FOLDER_UNITS).trim_end_matches(['.', ' ']);
+        if short.is_empty() {
+            fallback.to_owned()
+        } else {
+            short.to_owned()
+        }
+    };
+    let artist = folder(&row.artist, "UnknownArtist");
+    let album = folder(&row.album, "UnknownAlbum");
+    let dir = format!("/Contents/{artist}/{album}/");
+    let name_units = MAX_PATH_UNITS - units(&dir);
     let file = source
         .file_name()
         .and_then(|f| sanitise(&f.to_string_lossy()))
@@ -142,13 +161,14 @@ fn unique_device_path(row: &ExportTrack, source: &Path, used: &mut HashSet<Strin
         _ => (file.clone(), String::new()),
     };
     for n in 1.. {
-        let name = if n == 1 {
-            file.clone()
+        let suffix = if n == 1 {
+            ext.clone()
         } else {
-            let suffix = format!(" ({n}){ext}");
-            format!("{}{suffix}", truncate(&stem, MAX_NAME_BYTES - suffix.len()))
+            format!(" ({n}){ext}")
         };
-        let path = format!("/Contents/{artist}/{album}/{name}");
+        let room = name_units.saturating_sub(units(&suffix));
+        let stem = truncate(truncate_units(&stem, room), MAX_NAME_BYTES - suffix.len());
+        let path = format!("{dir}{stem}{suffix}");
         // Case-insensitive file systems treat these as the same file.
         if used.insert(path.to_lowercase()) {
             return path;
@@ -184,6 +204,42 @@ fn sanitise(name: &str) -> Option<String> {
     let trimmed = cleaned.trim().trim_end_matches(['.', ' ']);
     let trimmed = truncate(trimmed, MAX_NAME_BYTES).trim_end_matches(['.', ' ']);
     (!trimmed.is_empty() && trimmed != "." && trimmed != "..").then(|| trimmed.to_owned())
+}
+
+fn units(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+
+/// The longest prefix of `s` within `max` UTF-16 units.
+fn truncate_units(s: &str, max: usize) -> &str {
+    let mut count = 0;
+    for (index, c) in s.char_indices() {
+        count += c.len_utf16();
+        if count > max {
+            return &s[..index];
+        }
+    }
+    s
+}
+
+/// Whether two files hold the same bytes.
+fn same_contents(a: &Path, b: &Path) -> io::Result<bool> {
+    use std::io::Read;
+    if fs::metadata(a)?.len() != fs::metadata(b)?.len() {
+        return Ok(false);
+    }
+    let (mut a, mut b) = (fs::File::open(a)?, fs::File::open(b)?);
+    let (mut buf_a, mut buf_b) = (vec![0u8; 1 << 16], vec![0u8; 1 << 16]);
+    loop {
+        let n = a.read(&mut buf_a)?;
+        if n == 0 {
+            return Ok(true);
+        }
+        b.read_exact(&mut buf_b[..n])?;
+        if buf_a[..n] != buf_b[..n] {
+            return Ok(false);
+        }
+    }
 }
 
 /// The longest prefix of `s` within `max` bytes, on a character boundary.
@@ -250,5 +306,39 @@ mod tests {
         assert_eq!(a, "/Contents/Artist/UnknownAlbum/Track.mp3");
         assert_eq!(b, "/Contents/Artist/UnknownAlbum/track (2).MP3");
         assert_eq!(c, "/Contents/Artist/UnknownAlbum/Track (3).mp3");
+    }
+
+    #[test]
+    fn device_paths_fit_the_pdb_string_limit() {
+        let mut used = HashSet::new();
+        let row = ExportTrack {
+            artist: "A".repeat(100),
+            album: "Ä".repeat(100),
+            ..ExportTrack::default()
+        };
+        let source = PathBuf::from(format!("/m/{}.flac", "t".repeat(84)));
+        let first = unique_device_path(&row, &source, &mut used);
+        let second = unique_device_path(&row, &source, &mut used);
+        for path in [&first, &second] {
+            assert!(units(path) <= MAX_PATH_UNITS, "{} units", units(path));
+            assert!(path.ends_with(".flac"));
+        }
+        assert!(second.ends_with(" (2).flac"));
+        assert_ne!(first.to_lowercase(), second.to_lowercase());
+    }
+
+    #[test]
+    fn same_size_different_audio_is_not_kept() {
+        let dir = std::env::temp_dir().join(format!("cuepoint-same-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let (a, b, c) = (dir.join("a"), dir.join("b"), dir.join("c"));
+        fs::write(&a, [1u8; 70_000]).unwrap();
+        fs::write(&b, [1u8; 70_000]).unwrap();
+        let mut other = vec![1u8; 70_000];
+        other[69_999] = 2;
+        fs::write(&c, other).unwrap();
+        assert!(same_contents(&a, &b).unwrap());
+        assert!(!same_contents(&a, &c).unwrap());
+        fs::remove_dir_all(dir).unwrap();
     }
 }
