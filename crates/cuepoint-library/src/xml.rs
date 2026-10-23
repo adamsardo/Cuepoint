@@ -251,6 +251,11 @@ impl Attrs {
 }
 
 fn track_from(attrs: &Attrs) -> Track {
+    let location = attrs.get("Location");
+    // rekordbox exports streaming tracks (Beatport, TIDAL and so on) with a
+    // service catalogue path instead of a file, such as
+    // `file://localhost/v4/catalog/tracks/27134064/`; they have no file here.
+    let streaming = location.is_some_and(|l| l.contains("localhost/v4/catalog/"));
     Track {
         id: TrackId(attrs.text("TrackID")),
         title: attrs.text("Name"),
@@ -275,15 +280,22 @@ fn track_from(attrs: &Attrs) -> Track {
         bit_rate: attrs.number("BitRate").filter(|&r| r > 0),
         sample_rate: attrs.number("SampleRate").filter(|&r| r > 0),
         file_size: attrs.number("Size").filter(|&s| s > 0),
-        kind: attrs.text("Kind"),
+        kind: if streaming {
+            STREAMING_KIND.into()
+        } else {
+            attrs.text("Kind")
+        },
         date_added: attrs.text("DateAdded"),
-        location: attrs.get("Location").and_then(location_to_path),
+        location: location.filter(|_| !streaming).and_then(location_to_path),
         // Filled from the TRACK's TEMPO children by `finish_grid`.
         beatgrid: BeatGrid::default(),
         // Filled from the TRACK's POSITION_MARK children.
         cues: Vec::new(),
     }
 }
+
+/// `Track::kind` of a streaming-only track.
+pub const STREAMING_KIND: &str = "Streaming";
 
 fn parse_colour(value: &str) -> Option<TrackColour> {
     let hex = value
@@ -337,6 +349,8 @@ mod tests {
       Location="file://localhost/C:/Music/windowlicker.flac" Rating="0"/>
     <TRACK TrackID="13" Name="No Tempo" Artist="Unknown" AverageBpm="0.00" Rating="255"
       Location="file://localhost/Users/dj/Music/ambient.wav"/>
+    <TRACK TrackID="14" Name="Streamed" Kind="Unknown Format" Size="0"
+      Location="file://localhost/v4/catalog/tracks/27134064/"/>
   </COLLECTION>
   <PLAYLISTS>
     <NODE Type="0" Name="ROOT" Count="2">
@@ -359,7 +373,7 @@ mod tests {
     #[test]
     fn reads_collection_fields() {
         let library = parse(SAMPLE).unwrap();
-        assert_eq!(library.tracks().len(), 3);
+        assert_eq!(library.tracks().len(), 4);
         let t = library.track(&TrackId("11".into())).unwrap();
         assert_eq!(t.title, "Strings & Life");
         assert_eq!(t.bpm, Some(Bpm::from_centi(12500)));
@@ -390,6 +404,12 @@ mod tests {
         );
         assert_eq!(t.cues[2].slot_letter(), Some('C'));
         assert_eq!(t.cues[2].loop_end, Some(71.705));
+
+        let streamed = library.track(&TrackId("14".into())).unwrap();
+        assert_eq!(
+            (streamed.location.as_ref(), streamed.kind.as_str()),
+            (None, STREAMING_KIND)
+        );
 
         let windows = library.track(&TrackId("12".into())).unwrap();
         assert_eq!(
@@ -450,6 +470,6 @@ mod tests {
         bytes.extend(SAMPLE.encode_utf16().flat_map(u16::to_le_bytes));
         let text = decode_text(&bytes).unwrap();
         // The declaration still says UTF-8; quick-xml reads the decoded str.
-        assert_eq!(parse(&text).unwrap().tracks().len(), 3);
+        assert_eq!(parse(&text).unwrap().tracks().len(), 4);
     }
 }

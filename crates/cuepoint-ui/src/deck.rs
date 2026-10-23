@@ -35,8 +35,10 @@ pub struct LoadedTrack {
 pub struct DeckView {
     pub index: usize,
     pub loaded: Option<LoadedTrack>,
-    /// Shown while a track decodes, or after it failed.
+    /// Shown after a load failed or was refused.
     pub message: Option<String>,
+    /// Title of the track being decoded; the deck shows as empty meanwhile.
+    pub loading: Option<String>,
     /// Tempo slider position as a fraction, e.g. 0.02 = +2%.
     pub tempo: f64,
     pub tempo_range: f64,
@@ -49,6 +51,7 @@ impl DeckView {
             index,
             loaded: None,
             message: None,
+            loading: None,
             tempo: 0.0,
             tempo_range: TEMPO_RANGES[0].0,
             cue_held: false,
@@ -70,6 +73,12 @@ impl DeckView {
                     .monospace(),
             );
             match (&self.loaded, &self.message) {
+                _ if self.loading.is_some() => {
+                    ui.weak(format!(
+                        "Loading {}…",
+                        self.loading.as_deref().unwrap_or_default()
+                    ));
+                }
                 (_, Some(message)) => {
                     ui.weak(message);
                 }

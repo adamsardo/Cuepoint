@@ -1,5 +1,6 @@
 //! Owns the audio engine on the app side: decks, mixer and track loading.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
@@ -7,6 +8,8 @@ use cuepoint_analysis::AnalysisSettings;
 use cuepoint_core::{MusicalKey, Track};
 use cuepoint_engine::{AudioOutput, Command, DECKS, EngineHandle, EngineState, Pcm};
 use cuepoint_ui::{BandWaveform, DeckView, ExportView, LoadedTrack, MixerView};
+
+use crate::analysis_cache;
 
 /// Overview resolution; enough for a full-width waveform on large screens.
 const OVERVIEW_BINS: usize = 2048;
@@ -20,18 +23,78 @@ struct Decoded {
 }
 
 /// Decodes and analyses a track. Library data wins over analysis where the
-/// library has it (rekordbox's own grid and key), so imported grids match.
-fn prepare(track: Track, rate: u32) -> Result<(Arc<Pcm>, LoadedTrack), String> {
+/// library has it (rekordbox's own grid and key), so imported grids match,
+/// and then only the waveform is computed. Resampling to the engine rate
+/// and the analysis run in parallel on the decoded audio.
+fn prepare(
+    track: Track,
+    rate: u32,
+    cache: Option<&Path>,
+) -> Result<(Arc<Pcm>, LoadedTrack), String> {
     let path = track.location.clone().ok_or("no file location")?;
-    let pcm = cuepoint_engine::decode_file(&path, rate).map_err(|e| e.to_string())?;
-    let analysis = cuepoint_analysis::analyze(pcm.samples(), rate, &AnalysisSettings::default());
+    let started = std::time::Instant::now();
+    let native = cuepoint_engine::decode_native(&path).map_err(|e| e.to_string())?;
+    let decoded = started.elapsed();
+    let library_key = MusicalKey::parse(&track.key);
+    let needs_analysis = track.beatgrid.is_empty() || library_key.is_none();
+    // A cached analysis is enough when it has what the library lacks.
+    let cached = cache
+        .and_then(|dir| analysis_cache::read(dir, &path))
+        .filter(|c| !needs_analysis || (!c.grid.is_empty() && c.key.is_some()));
+    let from_cache = cached.is_some();
+    let (resampled, (grid, key, waveform)) = std::thread::scope(|scope| {
+        let analysis = scope.spawn(|| {
+            if let Some(c) = cached {
+                return (Some(c.grid), c.key, c.waveform);
+            }
+            let (samples, source_rate) = (native.samples(), native.sample_rate());
+            let result = if needs_analysis {
+                let a =
+                    cuepoint_analysis::analyze(samples, source_rate, &AnalysisSettings::default());
+                (Some(a.grid), a.key, a.waveform)
+            } else {
+                (
+                    None,
+                    None,
+                    cuepoint_analysis::colour_waveform(samples, source_rate),
+                )
+            };
+            if let Some(dir) = cache {
+                let entry = analysis_cache::Cached {
+                    grid: result.0.clone().unwrap_or_default(),
+                    key: result.1,
+                    waveform: result.2.clone(),
+                };
+                analysis_cache::write(dir, &path, &entry);
+            }
+            result
+        });
+        let resampled = cuepoint_engine::resampled(&native, rate);
+        (
+            resampled,
+            analysis.join().expect("analysis thread panicked"),
+        )
+    });
+    let pcm = resampled.map_err(|e| e.to_string())?.unwrap_or(native);
+    if timing() {
+        eprintln!(
+            "[timing] {}: decode {:.0} ms, then resample to {rate} Hz with {} {:.0} ms",
+            track.title,
+            decoded.as_secs_f64() * 1e3,
+            match (from_cache, needs_analysis) {
+                (true, _) => "cached analysis",
+                (false, true) => "full analysis",
+                (false, false) => "waveform",
+            },
+            (started.elapsed() - decoded).as_secs_f64() * 1e3
+        );
+    }
     let grid = if track.beatgrid.is_empty() {
-        analysis.grid
+        grid.unwrap_or_default()
     } else {
         track.beatgrid.clone()
     };
-    let key = MusicalKey::parse(&track.key).or(analysis.key);
-    let waveform = analysis.waveform;
+    let key = library_key.or(key);
     let loaded = LoadedTrack {
         overview: pcm.overview(OVERVIEW_BINS),
         bands: Some(BandWaveform {
@@ -47,12 +110,21 @@ fn prepare(track: Track, rate: u32) -> Result<(Arc<Pcm>, LoadedTrack), String> {
     Ok((Arc::new(pcm), loaded))
 }
 
+/// `CUEPOINT_DEV_TIMING` prints load timings to stderr.
+fn timing() -> bool {
+    std::env::var_os("CUEPOINT_DEV_TIMING").is_some()
+}
+
 pub struct Player {
     handle: EngineHandle,
     output: AudioOutput,
     pub decks: [DeckView; DECKS],
     pub mixer: MixerView,
     load_ids: [u64; DECKS],
+    /// Where analysis results are kept between loads.
+    cache: Option<PathBuf>,
+    /// When each deck's current load was requested, for timing.
+    load_started: [Option<std::time::Instant>; DECKS],
     /// Decoded tracks sent to the engine, waiting for it to accept or refuse.
     awaiting: [Option<(u64, LoadedTrack)>; DECKS],
     decoded_tx: Sender<Decoded>,
@@ -61,7 +133,7 @@ pub struct Player {
 }
 
 impl Player {
-    pub fn new() -> Self {
+    pub fn new(cache: Option<PathBuf>) -> Self {
         let (handle, output) = cuepoint_engine::open();
         let (decoded_tx, decoded_rx) = channel();
         Self {
@@ -70,11 +142,19 @@ impl Player {
             decks: std::array::from_fn(DeckView::new),
             mixer: MixerView::default(),
             load_ids: [0; DECKS],
+            cache,
+            load_started: [None; DECKS],
             awaiting: Default::default(),
             decoded_tx,
             decoded_rx,
             commands: Vec::new(),
         }
+    }
+
+    /// True while a load is decoding or waiting for the engine, or a deck
+    /// is playing: the UI must keep redrawing.
+    pub fn is_busy(&self, state: &EngineState) -> bool {
+        self.decks.iter().any(|d| d.loading.is_some()) || state.decks.iter().any(|d| d.playing)
     }
 
     pub fn output_description(&self) -> &str {
@@ -111,18 +191,28 @@ impl Player {
             ));
         }
         if track.location.is_none() {
-            return Err(format!("\"{}\" has no file location.", track.title));
+            return Err(if track.kind == cuepoint_library::xml::STREAMING_KIND {
+                format!(
+                    "\"{}\" is a streaming track; Cuepoint can only load local files.",
+                    track.title
+                )
+            } else {
+                format!("\"{}\" has no file location.", track.title)
+            });
         }
         self.load_ids[deck] += 1;
         let id = self.load_ids[deck];
-        self.decks[deck].message = Some(format!("Loading {}…", track.title));
+        self.decks[deck].loading = Some(track.title.clone());
+        self.decks[deck].message = None;
+        self.load_started[deck] = Some(std::time::Instant::now());
         let rate = self.handle.sample_rate();
         let tx = self.decoded_tx.clone();
+        let cache = self.cache.clone();
         std::thread::Builder::new()
             .name(format!("cuepoint-load-{deck}"))
             .spawn(move || {
                 let title = track.title.clone();
-                let result = prepare(track, rate);
+                let result = prepare(track, rate, cache.as_deref());
                 let _ = tx.send(Decoded {
                     deck,
                     id,
@@ -154,10 +244,12 @@ impl Player {
                     if sent {
                         self.awaiting[deck] = Some((decoded.id, loaded));
                     } else {
+                        self.decks[deck].loading = None;
                         self.decks[deck].message = Some("Audio engine is not responding.".into());
                     }
                 }
                 Err(error) => {
+                    self.decks[deck].loading = None;
                     self.decks[deck].message =
                         Some(format!("Could not load \"{}\": {error}", decoded.title));
                 }
@@ -171,10 +263,21 @@ impl Player {
             let deck_state = &state.decks[deck];
             if deck_state.load_serial == *serial {
                 let (_, loaded) = slot.take().expect("checked above");
+                if timing()
+                    && let Some(started) = self.load_started[deck].take()
+                {
+                    eprintln!(
+                        "[timing] load ready on deck {} after {:.0} ms",
+                        deck + 1,
+                        started.elapsed().as_secs_f64() * 1e3
+                    );
+                }
                 self.decks[deck].loaded = Some(loaded);
+                self.decks[deck].loading = None;
                 self.decks[deck].message = None;
             } else if deck_state.rejected_serial == *serial {
                 *slot = None;
+                self.decks[deck].loading = None;
                 self.decks[deck].message = Some(format!(
                     "Deck {} started playing, so the load was cancelled.",
                     deck + 1

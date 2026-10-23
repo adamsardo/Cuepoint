@@ -112,6 +112,11 @@ impl Pcm {
 /// Decodes `path` to stereo at `target_rate`. Mono is duplicated; channels
 /// beyond the first two are dropped.
 pub fn decode_file(path: &Path, target_rate: u32) -> Result<Pcm, DecodeError> {
+    resample_pcm(decode_native(path)?, target_rate)
+}
+
+/// Decodes `path` to stereo at the file's own sample rate.
+pub fn decode_native(path: &Path) -> Result<Pcm, DecodeError> {
     let file = File::open(path).map_err(|source| DecodeError::Open {
         path: path.display().to_string(),
         source,
@@ -171,16 +176,29 @@ pub fn decode_file(path: &Path, target_rate: u32) -> Result<Pcm, DecodeError> {
     if stereo.is_empty() {
         return Err(DecodeError::Empty);
     }
-    let samples = if source_rate == target_rate {
-        stereo
-    } else {
-        resample(&stereo, source_rate, target_rate)?
-    };
     Ok(Pcm {
         source_rate,
         source_bits,
-        ..Pcm::from_interleaved(target_rate, samples)
+        ..Pcm::from_interleaved(source_rate, stereo)
     })
+}
+
+/// `pcm` converted to `rate`; returned unchanged when it is already there.
+pub fn resample_pcm(pcm: Pcm, rate: u32) -> Result<Pcm, DecodeError> {
+    Ok(resampled(&pcm, rate)?.unwrap_or(pcm))
+}
+
+/// A copy of `pcm` at `rate`, or `None` when it is already at that rate.
+pub fn resampled(pcm: &Pcm, rate: u32) -> Result<Option<Pcm>, DecodeError> {
+    if pcm.sample_rate == rate {
+        return Ok(None);
+    }
+    let samples = resample(&pcm.samples, pcm.sample_rate, rate)?;
+    Ok(Some(Pcm {
+        source_rate: pcm.source_rate,
+        source_bits: pcm.source_bits,
+        ..Pcm::from_interleaved(rate, samples)
+    }))
 }
 
 /// The first picture embedded in `path`'s tags, as encoded image bytes
@@ -225,20 +243,36 @@ pub fn read_artwork(path: &Path) -> Option<Vec<u8>> {
     best
 }
 
+/// Resamples interleaved stereo, each channel on its own thread. Small
+/// FFT chunks keep the working set in cache, which is faster here.
 fn resample(stereo: &[f32], from: u32, to: u32) -> Result<Vec<f32>, DecodeError> {
     let error = |e: &dyn std::fmt::Display| DecodeError::Format(format!("resampling failed: {e}"));
     let frames = stereo.len() / 2;
-    let mut resampler = Fft::<f32>::new(from as usize, to as usize, 1024, 2, FixedSync::Both)
-        .map_err(|e| error(&e))?;
-    let out_len = resampler.process_all_needed_output_len(frames);
-    let mut out = vec![0f32; out_len * 2];
-    let input = InterleavedSlice::new(stereo, 2, frames).map_err(|e| error(&e))?;
-    let mut output = InterleavedSlice::new_mut(&mut out, 2, out_len).map_err(|e| error(&e))?;
-    let (_, produced) = resampler
-        .process_all_into_buffer(&input, &mut output, frames, None)
-        .map_err(|e| error(&e))?;
-    out.truncate(produced * 2);
-    Ok(out)
+    let channel = |offset: usize| -> Result<Vec<f32>, DecodeError> {
+        let mono: Vec<f32> = stereo.iter().skip(offset).step_by(2).copied().collect();
+        let mut resampler = Fft::<f32>::new(from as usize, to as usize, 256, 1, FixedSync::Both)
+            .map_err(|e| error(&e))?;
+        let out_len = resampler.process_all_needed_output_len(frames);
+        let mut out = vec![0f32; out_len];
+        let input = InterleavedSlice::new(&mono, 1, frames).map_err(|e| error(&e))?;
+        let mut output = InterleavedSlice::new_mut(&mut out, 1, out_len).map_err(|e| error(&e))?;
+        let (_, produced) = resampler
+            .process_all_into_buffer(&input, &mut output, frames, None)
+            .map_err(|e| error(&e))?;
+        out.truncate(produced);
+        Ok(out)
+    };
+    let (left, right) = std::thread::scope(|scope| {
+        let right = scope.spawn(|| channel(1));
+        let left = channel(0);
+        (left, right.join().expect("resampler thread panicked"))
+    });
+    let (left, right) = (left?, right?);
+    Ok(left
+        .iter()
+        .zip(&right)
+        .flat_map(|(&l, &r)| [l, r])
+        .collect())
 }
 
 #[cfg(test)]

@@ -1011,6 +1011,12 @@ impl Browser {
                 },
             );
             let track = &tracks[track_index];
+            // Tracks without a local file (streaming-only) are dimmed.
+            let ink = if track.location.is_some() {
+                theme::TEXT
+            } else {
+                theme::TEXT_OFF
+            };
             let mut cx = x;
             for (i, column) in columns.iter().enumerate() {
                 let last = i == columns.len() - 1;
@@ -1056,7 +1062,7 @@ impl Browser {
                             Align::Min,
                             title,
                             theme::body(),
-                            theme::TEXT,
+                            ink,
                         );
                         let small = |dx: f32, w: f32, text: &str| {
                             let font = theme::regular(9.0);
@@ -1097,7 +1103,7 @@ impl Browser {
                             Align::Min,
                             &(n + 1).to_string(),
                             theme::body(),
-                            theme::TEXT,
+                            ink,
                         );
                     }
                     Content::Text(sort) => {
@@ -1113,7 +1119,7 @@ impl Browser {
                         } else {
                             (cx + 5.5, Align::Min)
                         };
-                        paint::text(&cp, tx, cap, align, &text, theme::body(), theme::TEXT);
+                        paint::text(&cp, tx, cap, align, &text, theme::body(), ink);
                     }
                 }
                 cx += width;
@@ -1151,9 +1157,14 @@ impl Browser {
                 ap.circle_filled(cover.center() + vec2(0.0, 6.0), 4.0, theme::BUTTON_DARK);
             }
         }
-        if response.clicked()
-            && let Some(row) = response.interact_pointer_pos().and_then(row_at)
-        {
+        // Highlight on press, as rekordbox does, not on release.
+        let pressed = ui.input(|i| {
+            i.pointer
+                .primary_pressed()
+                .then(|| i.pointer.press_origin())
+                .flatten()
+        });
+        if let Some(row) = pressed.filter(|&pos| body.contains(pos)).and_then(row_at) {
             self.selected = Some(self.rows[row]);
         }
         let mut action = None;

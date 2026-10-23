@@ -328,6 +328,13 @@ impl ExportView {
     ) {
         let p = ui.painter_at(rect);
         paint::fill(&p, rect, theme::BLACK);
+        // While a new track decodes the player shows empty, as rekordbox's
+        // does; the previous track comes back if the load fails.
+        let hidden = if deck.loading.is_some() {
+            deck.loaded.take()
+        } else {
+            None
+        };
         let left = Rect::from_min_max(
             pos2(rect.left(), rect.top() + 1.0),
             pos2(rect.left() + LEFT_COLUMN, rect.bottom()),
@@ -346,6 +353,9 @@ impl ExportView {
         self.zoomed(ui, main, deck, state, sample_rate);
         self.lower_strip(ui, main, deck, state, sample_rate, commands);
         self.side_panel(ui, side, deck, state, sample_rate);
+        if hidden.is_some() {
+            deck.loaded = hidden;
+        }
     }
 
     fn left_column(

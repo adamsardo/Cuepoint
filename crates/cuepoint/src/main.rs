@@ -5,6 +5,7 @@
 //! export the collection to a USB/SD device without opening a window. The master.db key is read from
 //! `CUEPOINT_MASTERDB_KEY`, or asked for in the app.
 
+mod analysis_cache;
 mod export;
 mod player;
 
@@ -69,6 +70,8 @@ struct CuepointApp {
     previews: cuepoint_ui::PreviewCache,
     /// Pending `CUEPOINT_DEV_SEEK`, applied once Player A has its track.
     dev_seek: Option<f64>,
+    /// egui time of the last input event, to keep redrawing briefly after.
+    last_input: f64,
     status: Status,
     key_prompt: Option<KeyPrompt>,
     export: Option<RunningExport>,
@@ -96,7 +99,7 @@ struct KeyPrompt {
 impl CuepointApp {
     fn new() -> Self {
         Self {
-            player: Player::new(),
+            player: Player::new(cache_dir().map(|d| d.join("analysis"))),
             library: Library::default(),
             loaded_from: None,
             browser: Browser::default(),
@@ -105,6 +108,7 @@ impl CuepointApp {
             artwork: cuepoint_ui::ArtworkCache::new(),
             previews: preview_cache(),
             dev_seek: None,
+            last_input: 0.0,
             status: Status::default(),
             key_prompt: None,
             export: None,
@@ -326,6 +330,16 @@ impl CuepointApp {
 
 impl eframe::App for CuepointApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let frame_started = std::time::Instant::now();
+        self.draw(ui);
+        if std::env::var_os("CUEPOINT_DEV_TIMING").is_some() && frame_started.elapsed().as_millis() > 8 {
+            eprintln!("[timing] frame built in {:.1} ms", frame_started.elapsed().as_secs_f64() * 1e3);
+        }
+    }
+}
+
+impl CuepointApp {
+    fn draw(&mut self, ui: &mut egui::Ui) {
         self.player.poll_loads();
         self.poll_export();
         self.artwork.poll(ui.ctx());
@@ -424,8 +438,22 @@ impl eframe::App for CuepointApp {
         footer_response.context_menu(|ui| self.file_menu(ui));
         self.key_window(ui);
         self.export_window(ui);
-        // Keep playheads and meters moving.
-        ui.ctx().request_repaint_after(Duration::from_millis(16));
+        // Redraw at frame rate only while something moves or is arriving:
+        // playback, loads, an export, artwork and previews, and briefly after
+        // input so engine responses show. Otherwise once a second, for the
+        // clock.
+        let now = ui.input(|i| i.time);
+        if ui.input(|i| !i.events.is_empty() || i.pointer.any_down()) {
+            self.last_input = now;
+        }
+        let busy = self.player.is_busy(&state)
+            || self.export.is_some()
+            || self.dev_seek.is_some()
+            || self.artwork.is_pending()
+            || self.previews.is_pending()
+            || now - self.last_input < 0.5;
+        let wait = if busy { 16 } else { 1000 };
+        ui.ctx().request_repaint_after(Duration::from_millis(wait));
     }
 }
 

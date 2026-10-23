@@ -77,6 +77,11 @@ impl ArtworkCache {
         }
     }
 
+    /// True while any requested artwork is still decoding.
+    pub fn is_pending(&self) -> bool {
+        self.entries.values().any(|e| matches!(e, Entry::Pending))
+    }
+
     /// True once `path` is known to have no artwork.
     pub fn is_missing(&self, path: &Path) -> bool {
         matches!(self.entries.get(path), Some(Entry::Missing))
