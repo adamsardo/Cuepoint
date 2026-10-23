@@ -10,7 +10,7 @@ mod mixer;
 mod output;
 mod sync;
 
-pub use audio::{DecodeError, Pcm, decode_file};
+pub use audio::{DecodeError, Pcm, decode_file, read_artwork};
 pub use deck::{DECLICK_FRAMES, DeckState};
 pub use engine::{Command, DECKS, Engine, EngineHandle, EngineState, MAX_BLOCK, engine};
 pub use mixer::{

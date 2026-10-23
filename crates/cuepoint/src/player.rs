@@ -6,7 +6,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use cuepoint_analysis::AnalysisSettings;
 use cuepoint_core::{MusicalKey, Track};
 use cuepoint_engine::{AudioOutput, Command, DECKS, EngineHandle, EngineState, Pcm};
-use cuepoint_ui::{BandWaveform, DeckView, LoadedTrack, MixerView};
+use cuepoint_ui::{BandWaveform, DeckView, ExportView, LoadedTrack, MixerView};
 
 /// Overview resolution; enough for a full-width waveform on large screens.
 const OVERVIEW_BINS: usize = 2048;
@@ -204,6 +204,36 @@ impl Player {
                 state.sample_rate,
             );
         }
+    }
+
+    /// Export mode's single player, driving deck 1.
+    pub fn show_export(
+        &mut self,
+        view: &mut ExportView,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        state: &EngineState,
+        artwork: &mut cuepoint_ui::ArtworkCache,
+    ) {
+        view.player(
+            ui,
+            rect,
+            &mut self.decks[0],
+            &state.decks[0],
+            state.sample_rate,
+            &mut self.commands,
+            artwork,
+        );
+        self.flush();
+    }
+
+    pub fn seek(&mut self, deck: usize, frame: f64) {
+        self.handle.send(Command::Seek { deck, frame });
+    }
+
+    /// The track on deck 1, for marking it in the browser.
+    pub fn loaded_id(&self, deck: usize) -> Option<&cuepoint_core::TrackId> {
+        self.decks[deck].loaded.as_ref().map(|l| &l.track.id)
     }
 
     pub fn show_mixer(&mut self, ui: &mut egui::Ui, state: &EngineState) {

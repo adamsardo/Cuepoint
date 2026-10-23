@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cuepoint_library::Library;
-use cuepoint_ui::{Browser, BrowserAction};
+use cuepoint_ui::{Browser, BrowserAction, ExportView, Mode};
 use player::Player;
 
 const KEY_ENV: &str = "CUEPOINT_MASTERDB_KEY";
@@ -32,17 +32,25 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Cuepoint")
-            .with_inner_size([1280.0, 800.0]),
+            // rekordbox's window on a 14" MacBook Pro. The app draws its own
+            // 28 pt title bar, as rekordbox's is, under a transparent one.
+            .with_inner_size([1512.0, 949.0])
+            .with_min_inner_size([1024.0, 628.0])
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false),
         ..Default::default()
     };
     eframe::run_native(
         "Cuepoint",
         options,
-        Box::new(move |_cc| {
+        Box::new(move |cc| {
+            cuepoint_ui::theme::install(&cc.egui_ctx);
             let mut app = CuepointApp::new();
             if let Some(path) = path {
                 app.open(path, std::env::var(KEY_ENV).ok());
             }
+            app.apply_dev_state();
             Ok(Box::new(app))
         }),
     )
@@ -54,6 +62,12 @@ struct CuepointApp {
     /// Where the current library came from.
     loaded_from: Option<PathBuf>,
     browser: Browser,
+    mode: Mode,
+    export_view: ExportView,
+    artwork: cuepoint_ui::ArtworkCache,
+    previews: cuepoint_ui::PreviewCache,
+    /// Pending `CUEPOINT_DEV_SEEK`, applied once Player A has its track.
+    dev_seek: Option<f64>,
     status: Status,
     key_prompt: Option<KeyPrompt>,
     export: Option<RunningExport>,
@@ -85,9 +99,35 @@ impl CuepointApp {
             library: Library::default(),
             loaded_from: None,
             browser: Browser::default(),
+            mode: Mode::Export,
+            export_view: ExportView::default(),
+            artwork: cuepoint_ui::ArtworkCache::new(),
+            previews: preview_cache(),
+            dev_seek: None,
             status: Status::default(),
             key_prompt: None,
             export: None,
+        }
+    }
+
+    /// Development aid for side-by-side comparison with rekordbox:
+    /// `CUEPOINT_DEV_PLAYLIST` opens a playlist by name, `CUEPOINT_DEV_LOAD`
+    /// loads the track with that title to Player A and `CUEPOINT_DEV_SEEK`
+    /// seeks it to a time in seconds once loaded.
+    fn apply_dev_state(&mut self) {
+        if let Ok(name) = std::env::var("CUEPOINT_DEV_PLAYLIST") {
+            self.browser.select_playlist_named(&self.library, &name);
+        }
+        if let Ok(title) = std::env::var("CUEPOINT_DEV_LOAD")
+            && let Some(index) = self.library.tracks().iter().position(|t| t.title == title)
+        {
+            self.browser_action(BrowserAction::Load {
+                track: index,
+                deck: Some(0),
+            });
+            self.dev_seek = std::env::var("CUEPOINT_DEV_SEEK")
+                .ok()
+                .and_then(|s| s.parse().ok());
         }
     }
 
@@ -191,75 +231,53 @@ impl CuepointApp {
         }
     }
 
-    fn menu(&mut self, ui: &mut egui::Ui) {
-        egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("Open rekordbox XML…").clicked() {
-                    ui.close();
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("rekordbox XML", &["xml"])
-                        .pick_file()
-                    {
-                        self.open(path, None);
-                    }
-                }
-                if ui.button("Open rekordbox master.db…").clicked() {
-                    ui.close();
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("rekordbox database", &["db"])
-                        .pick_file()
-                    {
-                        self.open(path, std::env::var(KEY_ENV).ok());
-                    }
-                }
-                ui.separator();
-                let label = match self.browser.source() {
-                    cuepoint_ui::Source::Collection => "Export collection to device…",
-                    cuepoint_ui::Source::Playlist(_) => "Export playlist to device…",
-                };
-                let enabled = !self.library.tracks().is_empty() && self.export.is_none();
-                if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
-                    ui.close();
-                    self.start_export();
-                }
-            });
-        });
-    }
-
-    fn status_bar(&self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            let output = self.player.output_description();
-            if self.player.output_is_silent() {
-                ui.colored_label(ui.visuals().warn_fg_color, output);
-            } else {
-                ui.weak(format!("Audio: {output}"));
+    /// Library and export commands, shown from the window's context menu.
+    fn file_menu(&mut self, ui: &mut egui::Ui) {
+        if ui.button("Open rekordbox XML…").clicked() {
+            ui.close();
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("rekordbox XML", &["xml"])
+                .pick_file()
+            {
+                self.open(path, None);
             }
-            ui.separator();
-            self.library_status(ui);
-        });
+        }
+        if ui.button("Open rekordbox master.db…").clicked() {
+            ui.close();
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("rekordbox database", &["db"])
+                .pick_file()
+            {
+                self.open(path, std::env::var(KEY_ENV).ok());
+            }
+        }
+        ui.separator();
+        let label = match self.browser.source() {
+            cuepoint_ui::Source::Collection => "Export collection to device…",
+            cuepoint_ui::Source::Playlist(_) => "Export playlist to device…",
+        };
+        let enabled = !self.library.tracks().is_empty() && self.export.is_none();
+        if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+            ui.close();
+            self.start_export();
+        }
     }
 
-    fn library_status(&self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| match &self.status {
+    /// The footer's right-hand text: the list summary, or a status message,
+    /// after a warning when there is no audio output.
+    fn footer_text(&self) -> String {
+        let text = match &self.status {
             Status::Empty => {
-                ui.weak("No library open. File > Open rekordbox XML or master.db.");
+                "No library open. Right-click here to open a rekordbox XML or master.db.".into()
             }
-            Status::Loaded => {
-                let from = self.loaded_from.as_deref().map(Path::display);
-                ui.label(format!(
-                    "{} tracks, showing {} · {}",
-                    self.library.tracks().len(),
-                    self.browser.row_count(),
-                    from.map(|p| p.to_string()).unwrap_or_default()
-                ));
-            }
-            Status::Info(message) => {
-                ui.label(message);
-            }
-            Status::Error(message) => {
-                ui.colored_label(ui.visuals().error_fg_color, message);
-            }
-        });
+            Status::Loaded => self.browser.summary(&self.library),
+            Status::Info(message) | Status::Error(message) => message.clone(),
+        };
+        if self.player.output_is_silent() {
+            format!("{} · {text}", self.player.output_description())
+        } else {
+            text
+        }
     }
 
     fn key_window(&mut self, ui: &mut egui::Ui) {
@@ -299,24 +317,93 @@ impl eframe::App for CuepointApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.player.poll_loads();
         self.poll_export();
+        self.artwork.poll(ui.ctx());
+        self.previews.poll();
         let state = self.player.state();
-        egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
-        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
-        egui::Panel::top("decks").show(ui, |ui| {
-            self.player.show_detail_waveforms(ui, &state);
-            ui.add_space(4.0);
-            ui.columns(3, |columns| {
-                self.player.show_deck(&mut columns[0], 0, &state);
-                self.player.show_mixer(&mut columns[1], &state);
-                self.player.show_deck(&mut columns[2], 1, &state);
-            });
-        });
-        let action = egui::CentralPanel::default()
-            .show(ui, |ui| self.browser.show(ui, &self.library))
-            .inner;
-        if let Some(action) = action {
+        if state.decks[0].loaded
+            && let Some(seconds) = self.dev_seek.take()
+        {
+            self.player.seek(0, seconds * f64::from(state.sample_rate));
+        }
+        let window = ui.max_rect();
+        let title = egui::Rect::from_min_size(
+            window.min,
+            egui::vec2(window.width(), cuepoint_ui::TITLE_BAR),
+        );
+        cuepoint_ui::title_bar(ui, title, "Cuepoint");
+        let full = egui::Rect::from_min_max(egui::pos2(window.left(), title.bottom()), window.max);
+        let top =
+            egui::Rect::from_min_size(full.min, egui::vec2(full.width(), cuepoint_ui::TOP_BAR));
+        let footer = egui::Rect::from_min_max(
+            egui::pos2(full.left(), full.bottom() - cuepoint_ui::FOOTER),
+            full.max,
+        );
+        let clock = chrono::Local::now().format("%-I:%M").to_string();
+        if let Some(mode) = cuepoint_ui::top_bar(ui, top, self.mode, &clock) {
+            self.mode = mode;
+        }
+        let browser_top = match self.mode {
+            Mode::Export => {
+                let player = egui::Rect::from_min_size(
+                    egui::pos2(full.left(), top.bottom()),
+                    egui::vec2(full.width(), cuepoint_ui::PLAYER),
+                );
+                self.player.show_export(
+                    &mut self.export_view,
+                    ui,
+                    player,
+                    &state,
+                    &mut self.artwork,
+                );
+                player.bottom()
+            }
+            Mode::Performance => {
+                let decks = egui::Rect::from_min_size(
+                    egui::pos2(full.left(), top.bottom()),
+                    egui::vec2(full.width(), 330.0),
+                );
+                ui.painter()
+                    .rect_filled(decks, 0.0, cuepoint_ui::theme::PANEL);
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(decks.shrink(6.0)));
+                self.player.show_detail_waveforms(&mut child, &state);
+                child.add_space(4.0);
+                child.columns(3, |columns| {
+                    self.player.show_deck(&mut columns[0], 0, &state);
+                    self.player.show_mixer(&mut columns[1], &state);
+                    self.player.show_deck(&mut columns[2], 1, &state);
+                });
+                decks.bottom()
+            }
+        };
+        let divider = egui::Rect::from_min_size(
+            egui::pos2(full.left(), browser_top),
+            egui::vec2(full.width(), cuepoint_ui::DIVIDER),
+        );
+        ui.painter()
+            .rect_filled(divider, 0.0, cuepoint_ui::theme::BLACK);
+        let browser = egui::Rect::from_min_max(
+            egui::pos2(full.left(), divider.bottom()),
+            egui::pos2(full.right(), footer.top()),
+        );
+        let loaded = self
+            .player
+            .loaded_id(0)
+            .and_then(|id| self.library.track_index(id));
+        if let Some(action) = self.browser.show(
+            ui,
+            browser,
+            &self.library,
+            loaded,
+            &mut self.artwork,
+            &mut self.previews,
+        ) {
             self.browser_action(action);
         }
+        let footer_text = self.footer_text();
+        cuepoint_ui::footer(ui, footer, &footer_text);
+        let footer_response =
+            ui.interact(footer, ui.scope_id().with("footer"), egui::Sense::click());
+        footer_response.context_menu(|ui| self.file_menu(ui));
         self.key_window(ui);
         self.export_window(ui);
         // Keep playheads and meters moving.
@@ -364,6 +451,41 @@ fn export_cli(library: &Path, dest: &Path) -> i32 {
         }
     }
     1
+}
+
+/// Track list previews, made from Cuepoint's own 3-band waveform and kept
+/// in the user's cache folder.
+fn preview_cache() -> cuepoint_ui::PreviewCache {
+    const RATE: u32 = 44_100;
+    let worker = |path: &Path| {
+        let pcm = cuepoint_engine::decode_file(path, RATE).ok()?;
+        let bands = cuepoint_analysis::colour_waveform(pcm.samples(), RATE);
+        Some(cuepoint_ui::preview_from_bands(
+            &bands.low,
+            &bands.mid,
+            &bands.high,
+        ))
+    };
+    let threads =
+        std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(2).clamp(1, 4));
+    cuepoint_ui::PreviewCache::new(
+        std::sync::Arc::new(worker),
+        cache_dir().map(|d| d.join("previews")),
+        threads,
+    )
+}
+
+/// `~/Library/Caches/Cuepoint` on macOS, `$XDG_CACHE_HOME/cuepoint` (or
+/// `~/.cache/cuepoint`) elsewhere.
+fn cache_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if cfg!(target_os = "macos") {
+        return home.map(|h| h.join("Library/Caches/Cuepoint"));
+    }
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.map(|h| h.join(".cache")))
+        .map(|d| d.join("cuepoint"))
 }
 
 fn is_xml(path: &Path) -> bool {

@@ -30,8 +30,21 @@ pub struct BandWaveform {
 }
 
 impl BandWaveform {
+    /// Mean value of each band over points `start..end`, 0..=255.
+    pub(crate) fn means(&self, start: usize, end: usize) -> (f32, f32, f32) {
+        let end = end
+            .min(self.low.len())
+            .min(self.mid.len())
+            .min(self.high.len());
+        let start = start.min(end);
+        let count = (end - start).max(1) as f32;
+        let mean =
+            |band: &[u8]| band[start..end].iter().map(|&v| f32::from(v)).sum::<f32>() / count;
+        (mean(&self.low), mean(&self.mid), mean(&self.high))
+    }
+
     /// Largest value of each band over points `start..end`.
-    fn peaks(&self, start: usize, end: usize) -> (u8, u8, u8) {
+    pub(crate) fn peaks(&self, start: usize, end: usize) -> (u8, u8, u8) {
         let end = end
             .min(self.low.len())
             .min(self.mid.len())

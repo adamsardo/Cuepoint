@@ -1,18 +1,73 @@
 //! Three-band colour waveform (spec 04, section 2.4).
 //!
-//! The mono mix is split by 4th-order Linkwitz-Riley crossovers at 200 Hz
-//! and 2.5 kHz. Each point holds the peak absolute amplitude of each band
-//! over 1/150 s, scaled so full scale is 255. Values are absolute, not
-//! normalised per track, so quiet tracks draw small.
+//! Each point covers 1/150 s and holds a level per band, 0..=255. The bands
+//! and their envelopes were fitted to rekordbox 7.2.19's own 3-band detail
+//! waveform (`PWV7`, whose bytes run 0..=127) on five library tracks:
+//!
+//! - low: 400 Hz low-pass; mid: 250 Hz to 1.5 kHz; high: 1.5 kHz high-pass,
+//!   each a 4th-order Linkwitz-Riley filter (they overlap on purpose);
+//! - per point, the band's peak absolute amplitude, then a peak-hold
+//!   envelope that decays by a per-band factor each point;
+//! - level = `gain * envelope ^ exponent`, doubled to fill 0..=255.
+//!
+//! The fitted model tracks rekordbox's bands with correlations of 0.98 to
+//! 0.99 (low), 0.95 to 0.97 (mid) and 0.95 to 0.97 (high). Values are
+//! absolute, not normalised per track, so quiet tracks draw small.
 
 use crate::filter::{linkwitz_riley_highpass, linkwitz_riley_lowpass};
 
 /// rekordbox's detail ("zoom") waveform rate.
 pub const WAVEFORM_POINTS_PER_SECOND: u32 = 150;
-const LOW_MID_CROSSOVER_HZ: f64 = 200.0;
-const MID_HIGH_CROSSOVER_HZ: f64 = 2500.0;
+const LOW_CUTOFF_HZ: f64 = 400.0;
+const MID_LOW_HZ: f64 = 250.0;
+const MID_HIGH_HZ: f64 = 1500.0;
+const HIGH_CUTOFF_HZ: f64 = 1500.0;
 
-/// Peak level per band per point, 0..=255.
+/// Per band: envelope decay per point, exponent and gain (on rekordbox's
+/// 0..=127 scale).
+const LOW_SHAPE: Shape = Shape {
+    decay: 0.95,
+    exponent: 0.979,
+    gain: 103.0,
+};
+const MID_SHAPE: Shape = Shape {
+    decay: 0.90,
+    exponent: 0.883,
+    gain: 124.5,
+};
+const HIGH_SHAPE: Shape = Shape {
+    decay: 0.86,
+    exponent: 1.411,
+    gain: 84.0,
+};
+
+#[derive(Debug, Clone, Copy)]
+struct Shape {
+    decay: f64,
+    exponent: f64,
+    gain: f64,
+}
+
+/// Peak-hold envelope of one band, turned into a 0..=255 level.
+#[derive(Debug, Clone, Copy)]
+struct Envelope {
+    shape: Shape,
+    value: f64,
+}
+
+impl Envelope {
+    fn new(shape: Shape) -> Self {
+        Self { shape, value: 0.0 }
+    }
+
+    fn next(&mut self, peak: f64) -> u8 {
+        self.value = peak.max(self.value * self.shape.decay);
+        let level = 2.0 * self.shape.gain * self.value.powf(self.shape.exponent);
+        level.round().clamp(0.0, 255.0) as u8
+    }
+}
+
+/// Level per band per point, 0..=255.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ColourWaveform {
     pub points_per_second: u32,
@@ -31,8 +86,12 @@ impl ColourWaveform {
     }
 }
 
-fn to_byte(peak: f64) -> u8 {
-    (peak * 255.0).round().clamp(0.0, 255.0) as u8
+/// The level a steady band at `amplitude` settles to, for tests.
+#[cfg(test)]
+pub(crate) fn steady_level(band: usize, amplitude: f64) -> u8 {
+    let shape = [LOW_SHAPE, MID_SHAPE, HIGH_SHAPE][band];
+    let mut envelope = Envelope::new(shape);
+    envelope.next(amplitude)
 }
 
 pub(crate) fn colour_waveform(samples: &[f32], sample_rate: u32) -> ColourWaveform {
@@ -46,10 +105,15 @@ pub(crate) fn colour_waveform(samples: &[f32], sample_rate: u32) -> ColourWavefo
         (frames * pps).div_ceil(sr)
     };
 
-    let mut low_lp = linkwitz_riley_lowpass(rate, LOW_MID_CROSSOVER_HZ);
-    let mut low_hp = linkwitz_riley_highpass(rate, LOW_MID_CROSSOVER_HZ);
-    let mut high_lp = linkwitz_riley_lowpass(rate, MID_HIGH_CROSSOVER_HZ);
-    let mut high_hp = linkwitz_riley_highpass(rate, MID_HIGH_CROSSOVER_HZ);
+    let mut low_lp = linkwitz_riley_lowpass(rate, LOW_CUTOFF_HZ);
+    let mut mid_hp = linkwitz_riley_highpass(rate, MID_LOW_HZ);
+    let mut mid_lp = linkwitz_riley_lowpass(rate, MID_HIGH_HZ);
+    let mut high_hp = linkwitz_riley_highpass(rate, HIGH_CUTOFF_HZ);
+    let mut envelopes = [
+        Envelope::new(LOW_SHAPE),
+        Envelope::new(MID_SHAPE),
+        Envelope::new(HIGH_SHAPE),
+    ];
 
     let mut out = ColourWaveform {
         points_per_second: WAVEFORM_POINTS_PER_SECOND,
@@ -65,14 +129,13 @@ pub(crate) fn colour_waveform(samples: &[f32], sample_rate: u32) -> ColourWavefo
         let (mut low, mut mid, mut high) = (0f64, 0f64, 0f64);
         for &[l, r] in samples[2 * start..2 * end].as_chunks::<2>().0 {
             let mono = 0.5 * (f64::from(l) + f64::from(r));
-            let above_low = low_hp.process(mono);
             low = low.max(low_lp.process(mono).abs());
-            mid = mid.max(high_lp.process(above_low).abs());
-            high = high.max(high_hp.process(above_low).abs());
+            mid = mid.max(mid_lp.process(mid_hp.process(mono)).abs());
+            high = high.max(high_hp.process(mono).abs());
         }
-        out.low.push(to_byte(low));
-        out.mid.push(to_byte(mid));
-        out.high.push(to_byte(high));
+        out.low.push(envelopes[0].next(low));
+        out.mid.push(envelopes[1].next(mid));
+        out.high.push(envelopes[2].next(high));
     }
     out
 }

@@ -306,7 +306,12 @@ fn waveform_bands_separate() {
         median(&low.mid),
         median(&low.high)
     );
-    assert!(median(&low.low) >= 120);
+    // A 0.5 amplitude sine settles near its steady level in its own band.
+    let near = |value: u8, expected: u8| (f64::from(value) / f64::from(expected) - 1.0).abs() < 0.1;
+    assert!(near(
+        median(&low.low),
+        crate::waveform::steady_level(0, 0.5)
+    ));
     assert!(median(&low.high) <= 2);
 
     let high = sine_waveform(6000.0, seconds);
@@ -316,7 +321,10 @@ fn waveform_bands_separate() {
         median(&high.mid),
         median(&high.high)
     );
-    assert!(median(&high.high) >= 120);
+    assert!(near(
+        median(&high.high),
+        crate::waveform::steady_level(2, 0.5)
+    ));
     assert!(median(&high.low) <= 2);
 }
 

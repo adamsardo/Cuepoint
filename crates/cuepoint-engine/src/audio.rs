@@ -183,6 +183,48 @@ pub fn decode_file(path: &Path, target_rate: u32) -> Result<Pcm, DecodeError> {
     })
 }
 
+/// The first picture embedded in `path`'s tags, as encoded image bytes
+/// (usually JPEG or PNG): the front cover when one is marked, otherwise
+/// whichever comes first. `None` when the file has none or cannot be read.
+pub fn read_artwork(path: &Path) -> Option<Vec<u8>> {
+    use symphonia::core::meta::StandardVisualKey;
+    let file = File::open(path).ok()?;
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let stream = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut format = symphonia::default::get_probe()
+        .probe(
+            &hint,
+            stream,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
+        .ok()?;
+    let mut metadata = format.metadata();
+    let mut best: Option<Vec<u8>> = None;
+    loop {
+        if let Some(revision) = metadata.current() {
+            let visuals = &revision.media.visuals;
+            let front = visuals
+                .iter()
+                .find(|v| v.usage == Some(StandardVisualKey::FrontCover))
+                .or_else(|| visuals.first());
+            if let Some(visual) = front {
+                best = Some(visual.data.to_vec());
+                if visual.usage == Some(StandardVisualKey::FrontCover) {
+                    break;
+                }
+            }
+        }
+        if metadata.pop().is_none() {
+            break;
+        }
+    }
+    best
+}
+
 fn resample(stereo: &[f32], from: u32, to: u32) -> Result<Vec<f32>, DecodeError> {
     let error = |e: &dyn std::fmt::Display| DecodeError::Format(format!("resampling failed: {e}"));
     let frames = stereo.len() / 2;

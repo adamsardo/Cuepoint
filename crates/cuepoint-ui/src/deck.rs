@@ -40,7 +40,7 @@ pub struct DeckView {
     /// Tempo slider position as a fraction, e.g. 0.02 = +2%.
     pub tempo: f64,
     pub tempo_range: f64,
-    cue_held: bool,
+    pub(crate) cue_held: bool,
 }
 
 impl DeckView {

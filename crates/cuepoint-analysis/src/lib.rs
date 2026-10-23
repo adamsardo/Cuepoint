@@ -79,6 +79,12 @@ pub struct Analysis {
 }
 
 /// Analyses interleaved stereo `samples` at `sample_rate`.
+/// Only the 3-band colour waveform of interleaved stereo `samples`, for
+/// previews that do not need the rest of the analysis.
+pub fn colour_waveform(samples: &[f32], sample_rate: u32) -> ColourWaveform {
+    waveform::colour_waveform(samples, sample_rate)
+}
+
 pub fn analyze(samples: &[f32], sample_rate: u32, settings: &AnalysisSettings) -> Analysis {
     let settings = settings.sanitised();
     if sample_rate == 0 {

@@ -98,6 +98,8 @@ pub struct Track {
     pub location: Option<PathBuf>,
     /// Grid from the source library, empty when it has none.
     pub beatgrid: BeatGrid,
+    /// Memory cues, hot cues and saved loops, in source order.
+    pub cues: Vec<crate::Cue>,
 }
 
 #[cfg(test)]

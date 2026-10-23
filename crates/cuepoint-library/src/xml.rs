@@ -3,7 +3,7 @@
 //! Layout, per AlphaTheta's public "rekordbox XML format" document and
 //! `docs/spec/subsystems/01-library-database.md` section 3.6:
 //! `COLLECTION/TRACK` holds one element per track (attributes are the track
-//! fields; `TEMPO` and `POSITION_MARK` children are not read yet), and
+//! fields, with `TEMPO` grid markers and `POSITION_MARK` cues as children), and
 //! `PLAYLISTS/NODE` is a tree whose root node is named `ROOT`. A node with
 //! `Type="0"` is a folder; `Type="1"` is a playlist whose `TRACK Key=...`
 //! children reference tracks by `TrackID` (`KeyType="0"`) or by `Location`
@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cuepoint_core::{
-    BeatGrid, Bpm, PlaylistKind, PlaylistNode, Rating, TempoMarker, Track, TrackColour, TrackId,
+    BeatGrid, Bpm, Cue, PlaylistKind, PlaylistNode, Rating, TempoMarker, Track, TrackColour,
+    TrackId,
 };
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
@@ -102,6 +103,11 @@ pub fn parse(text: &str) -> Result<Library> {
             "COLLECTION" => in_collection = !is_empty,
             "PLAYLISTS" => in_playlists = !is_empty,
             "TEMPO" if in_collection => markers.extend(tempo_marker(&attrs)),
+            "POSITION_MARK" if in_collection => {
+                if let (Some(track), Some(cue)) = (tracks.last_mut(), position_mark(&attrs)) {
+                    track.cues.push(cue);
+                }
+            }
             "TRACK" if in_collection && stack.is_empty() => {
                 let track = track_from(&attrs);
                 if let Some(location) = attrs.get("Location") {
@@ -163,6 +169,32 @@ fn tempo_marker(attrs: &Attrs) -> Option<TempoMarker> {
         time: attrs.number("Inizio")?,
         bpm: attrs.number("Bpm")?,
         beat_in_bar: attrs.number("Battito").unwrap_or(1),
+    })
+}
+
+/// `POSITION_MARK Name="" Type="0" Start="0.049" Num="0" Red="255" ...`:
+/// `Num` is the hot cue slot (0 = A) or -1 for a memory cue; `Type` 4 is a
+/// loop ending at `End`. Fade and load markers (types 1 to 3) are skipped.
+fn position_mark(attrs: &Attrs) -> Option<Cue> {
+    let kind: u8 = attrs.number("Type").unwrap_or(0);
+    if !matches!(kind, 0 | 4) {
+        return None;
+    }
+    let slot: i32 = attrs.number("Num").unwrap_or(-1);
+    let colour = match (
+        attrs.number::<u32>("Red"),
+        attrs.number::<u32>("Green"),
+        attrs.number::<u32>("Blue"),
+    ) {
+        (Some(r), Some(g), Some(b)) => Some((r.min(255) << 16) | (g.min(255) << 8) | b.min(255)),
+        _ => None,
+    };
+    Some(Cue {
+        hot_cue: u8::try_from(slot).ok().filter(|&s| s < 16),
+        start: attrs.number("Start")?,
+        loop_end: if kind == 4 { attrs.number("End") } else { None },
+        name: attrs.get("Name").unwrap_or("").to_owned(),
+        colour,
     })
 }
 
@@ -248,6 +280,8 @@ fn track_from(attrs: &Attrs) -> Track {
         location: attrs.get("Location").and_then(location_to_path),
         // Filled from the TRACK's TEMPO children by `finish_grid`.
         beatgrid: BeatGrid::default(),
+        // Filled from the TRACK's POSITION_MARK children.
+        cues: Vec::new(),
     }
 }
 
@@ -295,6 +329,9 @@ mod tests {
       Remixer="" Tonality="8A" Label="Transmat" Colour="0xFF007F">
       <TEMPO Inizio="0.025" Bpm="125.00" Metro="4/4" Battito="1"/>
       <POSITION_MARK Name="" Type="0" Start="0.025" Num="-1"/>
+      <POSITION_MARK Name="1.1Bars" Type="0" Start="0.025" Num="0" Red="255" Green="55" Blue="111"/>
+      <POSITION_MARK Name="Drop" Type="4" Start="64.025" End="71.705" Num="2" Red="40" Green="226" Blue="20"/>
+      <POSITION_MARK Name="" Type="3" Start="0.000" Num="-1"/>
     </TRACK>
     <TRACK TrackID="12" Name="Windowlicker" Artist="Aphex Twin" TotalTime="366" AverageBpm="127.30"
       Location="file://localhost/C:/Music/windowlicker.flac" Rating="0"/>
@@ -341,6 +378,18 @@ mod tests {
             (marker.time, marker.bpm, marker.beat_in_bar),
             (0.025, 125.0, 1)
         );
+
+        // A memory cue, hot cue A and a looping hot cue C; the load
+        // marker (Type 3) is skipped.
+        assert_eq!(t.cues.len(), 3);
+        assert_eq!((t.cues[0].hot_cue, t.cues[0].start), (None, 0.025));
+        assert_eq!(t.cues[1].slot_letter(), Some('A'));
+        assert_eq!(
+            (t.cues[1].name.as_str(), t.cues[1].colour),
+            ("1.1Bars", Some(0xFF376F))
+        );
+        assert_eq!(t.cues[2].slot_letter(), Some('C'));
+        assert_eq!(t.cues[2].loop_end, Some(71.705));
 
         let windows = library.track(&TrackId("12".into())).unwrap();
         assert_eq!(

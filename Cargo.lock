@@ -964,6 +964,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 name = "cuepoint"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "cuepoint-analysis",
  "cuepoint-core",
  "cuepoint-engine",
@@ -1055,6 +1056,7 @@ dependencies = [
  "cuepoint-library",
  "egui",
  "egui_extras",
+ "image",
 ]
 
 [[package]]
@@ -2029,6 +2031,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
