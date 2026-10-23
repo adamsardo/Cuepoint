@@ -71,8 +71,8 @@ pub struct ExportView {
     grid_redo: Vec<cuepoint_core::BeatGrid>,
     /// Recent TAP times, in egui seconds.
     taps: Vec<f64>,
-    /// The track the undo history belongs to.
-    grid_track: Option<cuepoint_core::TrackId>,
+    /// The deck load (`DeckView::loads`) the undo history belongs to.
+    grid_load: u64,
     /// MEMORY tab scroll position, in points.
     memory_scroll: f32,
 }
@@ -89,7 +89,7 @@ impl Default for ExportView {
             grid_undo: Vec::new(),
             grid_redo: Vec::new(),
             taps: Vec::new(),
-            grid_track: None,
+            grid_load: 0,
             memory_scroll: 0.0,
         }
     }
@@ -331,13 +331,22 @@ impl ExportView {
     ) {
         let p = ui.painter_at(rect);
         paint::fill(&p, rect, theme::BLACK);
+        // Grid edit history belongs to one load, whichever tab is showing,
+        // so a reload of the same track starts afresh.
+        if deck.loads != self.grid_load {
+            self.grid_undo.clear();
+            self.grid_redo.clear();
+            self.taps.clear();
+            self.grid_load = deck.loads;
+        }
         // While a new track decodes the player shows empty, as rekordbox's
-        // does; the previous track comes back if the load fails.
-        let hidden = if deck.loading.is_some() {
-            deck.loaded.take()
-        } else {
-            None
-        };
+        // does; the previous track comes back if the load fails. The
+        // engine still holds that track, so the player's controls are
+        // inert meanwhile, except releasing a held CUE.
+        let loading = deck.loading.is_some();
+        let hidden = if loading { deck.loaded.take() } else { None };
+        let mut inert = Vec::new();
+        let sink = if loading { &mut inert } else { &mut *commands };
         let left = Rect::from_min_max(
             pos2(rect.left(), rect.top() + 1.0),
             pos2(rect.left() + LEFT_COLUMN, rect.bottom()),
@@ -350,12 +359,17 @@ impl ExportView {
             pos2(left.right(), rect.top()),
             pos2(side.left() - 3.0, rect.bottom()),
         );
-        self.left_column(ui, left, deck, state, commands);
+        self.left_column(ui, left, deck, state, sink);
         self.info_row(ui, main, deck, state, sample_rate, artwork);
-        self.overview(ui, main, deck, state, sample_rate, commands);
+        self.overview(ui, main, deck, state, sample_rate, sink);
         self.zoomed(ui, main, deck, state, sample_rate);
-        self.lower_strip(ui, main, deck, state, sample_rate, commands);
-        self.side_panel(ui, side, deck, sample_rate, commands);
+        self.lower_strip(ui, main, deck, state, sample_rate, sink);
+        self.side_panel(ui, side, deck, sample_rate, sink);
+        commands.extend(
+            inert
+                .into_iter()
+                .filter(|c| matches!(c, Command::CueUp { .. })),
+        );
         if hidden.is_some() {
             deck.loaded = hidden;
         }
@@ -1154,13 +1168,6 @@ impl ExportView {
         commands: &mut Vec<Command>,
     ) {
         let (x, y) = (strip.left(), strip.top());
-        let track = deck.loaded.as_ref().map(|l| l.track.id.clone());
-        if track != self.grid_track {
-            self.grid_undo.clear();
-            self.grid_redo.clear();
-            self.taps.clear();
-            self.grid_track = track;
-        }
         // Positions in a 1220 pt player, from x 173 (window) onwards.
         let gx = x + 93.0;
         let label = theme::bold(theme::BODY_SIZE * 0.85);

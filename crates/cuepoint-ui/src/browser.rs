@@ -211,6 +211,9 @@ pub struct Browser {
     playlists_open: bool,
     /// Track list scroll position, in points.
     scroll: f32,
+    /// Track list horizontal scroll, in points, when the columns are wider
+    /// than the list.
+    hscroll: f32,
     tree_scroll: f32,
     /// Row the context menu was opened on.
     context_row: Option<usize>,
@@ -237,6 +240,7 @@ impl Default for Browser {
             collapsed: HashSet::new(),
             playlists_open: true,
             scroll: 0.0,
+            hscroll: 0.0,
             tree_scroll: 0.0,
             context_row: None,
             view: ListView::Standard,
@@ -917,17 +921,37 @@ impl Browser {
             theme::BLACK,
         );
         paint::fill(&p, header, theme::PANEL);
-        let mut cx = x;
-        let mut clicked_column = None;
+        let body = Rect::from_min_max(
+            pos2(x, header.bottom()),
+            pos2(list_right, rect.bottom() - 12.0),
+        );
         let columns = self.view.columns();
         let row_h = self.view.row_height();
+        // Columns wider than the list scroll sideways (trackpad, or Shift
+        // with the wheel); the last column stretches to fill a wide list.
+        let content_width: f32 = columns.iter().map(|c| c.width).sum();
+        let max_hscroll = (content_width - (list_right - x)).max(0.0);
+        if ui.rect_contains_pointer(body.union(header)) {
+            self.hscroll -= ui.input(|i| i.smooth_scroll_delta.x);
+        }
+        self.hscroll = self.hscroll.clamp(0.0, max_hscroll);
+        let column_width = |i: usize, cx: f32| {
+            let width = columns[i].width;
+            if i == columns.len() - 1 {
+                (list_right - cx).max(width)
+            } else {
+                width
+            }
+        };
+        let hp = ui.painter_at(header);
+        let mut cx = x - self.hscroll;
+        let mut clicked_column = None;
         for (i, column) in columns.iter().enumerate() {
-            let last = i == columns.len() - 1;
-            let width = if last { list_right - cx } else { column.width };
+            let width = column_width(i, cx);
             let cell =
                 Rect::from_min_size(pos2(cx, header.top()), vec2(width - 1.0, header.height()));
             paint::fill(
-                &p,
+                &hp,
                 Rect::from_min_size(
                     pos2(cx + width - 1.0, header.top()),
                     vec2(1.0, header.height()),
@@ -945,10 +969,10 @@ impl Browser {
                 theme::TEXT
             };
             if i == 0 {
-                paint::funnel(&p, pos2(cell.center().x, cell.center().y), theme::TEXT_DIM);
+                paint::funnel(&hp, pos2(cell.center().x, cell.center().y), theme::TEXT_DIM);
             } else {
                 paint::text(
-                    &p,
+                    &hp,
                     cx + 7.0,
                     header.top() + 2.0,
                     Align::Min,
@@ -959,15 +983,17 @@ impl Browser {
             }
             if let Some(ascending) = sorted {
                 paint::sort_arrow(
-                    &p,
+                    &hp,
                     pos2(cx + width - 11.5, cell.center().y),
                     ascending,
                     theme::ACCENT,
                 );
             }
+            let hit = cell.intersect(header);
             if matches!(column.content, Content::Text(_) | Content::Number)
+                && hit.is_positive()
                 && ui
-                    .interact(cell, ui.scope_id().with(("column", i)), Sense::click())
+                    .interact(hit, ui.scope_id().with(("column", i)), Sense::click())
                     .clicked()
             {
                 clicked_column = Some(column.content);
@@ -984,10 +1010,6 @@ impl Browser {
         }
 
         // Rows.
-        let body = Rect::from_min_max(
-            pos2(x, header.bottom()),
-            pos2(list_right, rect.bottom() - 12.0),
-        );
         let response = ui.interact(body, ui.scope_id().with("track_rows"), Sense::click());
         let max_scroll = (self.rows.len() as f32 * row_h - body.height()).max(0.0);
         if response.hovered() {
@@ -1032,10 +1054,10 @@ impl Browser {
             } else {
                 theme::TEXT_OFF
             };
-            let mut cx = x;
+            let mut cx = x - self.hscroll;
             for (i, column) in columns.iter().enumerate() {
                 let last = i == columns.len() - 1;
-                let width = if last { list_right - cx } else { column.width };
+                let width = column_width(i, cx);
                 if !last {
                     paint::fill(
                         &bp,
@@ -1143,7 +1165,7 @@ impl Browser {
         // Artwork: each cover is drawn at full column width from its row's
         // top and runs down into the rows below until the next cover, as
         // rekordbox draws it. Start a few rows up so their overflow shows.
-        let art_left = x + columns[..4].iter().map(|c| c.width).sum::<f32>();
+        let art_left = x - self.hscroll + columns[..4].iter().map(|c| c.width).sum::<f32>();
         let art_width = columns[4].width - 1.0;
         // The artwork view gives each row its own square cover.
         let overflow = if self.view == ListView::Standard {
@@ -1240,17 +1262,30 @@ impl Browser {
             let thumb = Rect::from_min_size(pos2(track_rect.left() + 4.0, top), vec2(4.5, length));
             paint::rounded(&p, thumb, 2.25, theme::TAB_OFF);
         }
-        // Horizontal scrollbar strip at the bottom.
+        // Horizontal scrollbar strip at the bottom; its thumb drags.
         let bottom = Rect::from_min_max(pos2(x, rect.bottom() - 12.0), rect.max);
         paint::fill(&p, bottom, theme::BLACK);
-        // rekordbox's default columns run past the view, so its thumb stops
-        // short of the end.
-        let thumb_right = x + (list_right - x) * 0.84;
-        let thumb = Rect::from_min_max(
-            pos2(x + 1.0, bottom.top() + 2.0),
-            pos2(thumb_right, bottom.top() + 8.0),
-        );
+        let track_width = list_right - x - 2.0;
+        let length = if max_hscroll > 0.0 {
+            ((list_right - x) / content_width * track_width).max(20.0)
+        } else {
+            track_width
+        };
+        let travel = (track_width - length).max(1.0);
+        let left = x
+            + 1.0
+            + if max_hscroll > 0.0 {
+                self.hscroll / max_hscroll * travel
+            } else {
+                0.0
+            };
+        let thumb = Rect::from_min_size(pos2(left, bottom.top() + 2.0), vec2(length, 6.0));
         paint::rounded(&p, thumb, 3.0, theme::TAB_OFF);
+        let drag = ui.interact(bottom, ui.scope_id().with("hscrollbar"), Sense::drag());
+        if drag.dragged() {
+            self.hscroll =
+                (self.hscroll + drag.drag_delta().x * max_hscroll / travel).clamp(0.0, max_hscroll);
+        }
         self.keyboard(ui, body.height(), row_h).or(action)
     }
 }

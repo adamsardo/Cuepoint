@@ -43,6 +43,9 @@ pub struct DeckView {
     pub tempo: f64,
     pub tempo_range: f64,
     pub(crate) cue_held: bool,
+    /// Tracks put on this deck so far, so a view can tell a reload of the
+    /// same track from the load it already has.
+    pub loads: u64,
 }
 
 impl DeckView {
@@ -55,7 +58,14 @@ impl DeckView {
             tempo: 0.0,
             tempo_range: TEMPO_RANGES[0].0,
             cue_held: false,
+            loads: 0,
         }
+    }
+
+    /// Puts `track` on the deck as a new load.
+    pub fn set_loaded(&mut self, track: LoadedTrack) {
+        self.loaded = Some(track);
+        self.loads += 1;
     }
 
     pub fn show(

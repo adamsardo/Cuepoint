@@ -277,7 +277,7 @@ impl Player {
                 // The engine now holds this track, so show it as loaded, but
                 // keep the newer load's progress showing until it arrives.
                 if superseded {
-                    self.decks[deck].loaded = Some(loaded);
+                    self.decks[deck].set_loaded(loaded);
                     continue;
                 }
                 if timing()
@@ -289,7 +289,7 @@ impl Player {
                         started.elapsed().as_secs_f64() * 1e3
                     );
                 }
-                self.decks[deck].loaded = Some(loaded);
+                self.decks[deck].set_loaded(loaded);
                 self.decks[deck].loading = None;
                 self.decks[deck].message = None;
             } else if deck_state.rejected_serial == *serial {
