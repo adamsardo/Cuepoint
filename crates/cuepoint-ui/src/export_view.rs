@@ -1825,9 +1825,7 @@ fn clock(seconds: f64) -> (String, u64) {
 fn bar_beat(grid: &BeatGrid, beat: f64) -> String {
     let index = beat.floor() as i64;
     let in_bar = grid.beat_in_bar(index).unwrap_or(1);
-    // Beats before the first downbeat belong to bar 0.
-    let first_downbeat = (0..4).find(|&b| grid.is_downbeat(b)).unwrap_or(0);
-    let bar = (index - first_downbeat).div_euclid(4) + 1;
+    let bar = grid.bar_number(index).unwrap_or(1);
     format!("{bar}.{in_bar}Bars")
 }
 

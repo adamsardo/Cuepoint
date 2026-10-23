@@ -8,13 +8,16 @@ use cuepoint_analysis::ColourWaveform;
 use cuepoint_core::{BeatGrid, MusicalKey, TempoMarker};
 use cuepoint_ui::disk_cache;
 
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 /// The cache's size on disk, at most: a few thousand tracks' worth.
 const MAX_BYTES: u64 = 1 << 30;
 
 /// What a load needs from analysis.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cached {
+    /// A full analysis ran, so a missing grid or key means none was found;
+    /// otherwise only the waveform was computed.
+    pub analysed: bool,
     pub grid: BeatGrid,
     pub key: Option<MusicalKey>,
     pub waveform: ColourWaveform,
@@ -50,11 +53,11 @@ fn file(dir: &Path, audio: &Path) -> Option<PathBuf> {
     Some(dir.join(format!("{:016x}.analysis", hasher.finish())))
 }
 
-/// Layout: version, key (tonic, minor; 0xFF when unknown), marker count and
-/// markers (time f64, bpm f64, beat in bar u8), points per second, point
-/// count, then the low, mid and high bands. Little-endian.
+/// Layout: version, analysed flag, key (tonic, minor; 0xFF when unknown),
+/// marker count and markers (time f64, bpm f64, beat in bar u8), points per
+/// second, point count, then the low, mid and high bands. Little-endian.
 fn encode(entry: &Cached) -> Vec<u8> {
-    let mut out = vec![VERSION];
+    let mut out = vec![VERSION, u8::from(entry.analysed)];
     match entry.key {
         Some(key) => out.extend([key.tonic(), u8::from(key.is_minor())]),
         None => out.extend([0xFF, 0]),
@@ -85,6 +88,7 @@ fn decode(bytes: &[u8]) -> Option<Cached> {
     if take(1)?[0] != VERSION {
         return None;
     }
+    let analysed = take(1)?[0] != 0;
     let key = match take(2)? {
         [0xFF, _] => None,
         [tonic, minor] => Some(MusicalKey::new(*tonic, *minor != 0)),
@@ -107,6 +111,7 @@ fn decode(bytes: &[u8]) -> Option<Cached> {
     let mid = take(points)?.to_vec();
     let high = take(points)?.to_vec();
     Some(Cached {
+        analysed,
         grid: BeatGrid::from_markers(markers),
         key,
         waveform: ColourWaveform {
@@ -125,6 +130,7 @@ mod tests {
     #[test]
     fn entries_round_trip() {
         let entry = Cached {
+            analysed: true,
             grid: BeatGrid::constant(126.0, 0.05, 1),
             key: Some(MusicalKey::new(9, true)),
             waveform: ColourWaveform {
@@ -135,7 +141,11 @@ mod tests {
             },
         };
         assert_eq!(decode(&encode(&entry)), Some(entry.clone()));
-        let unkeyed = Cached { key: None, ..entry };
+        let unkeyed = Cached {
+            analysed: false,
+            key: None,
+            ..entry
+        };
         assert_eq!(decode(&encode(&unkeyed)), Some(unkeyed.clone()));
         let mut truncated = encode(&unkeyed);
         truncated.pop();

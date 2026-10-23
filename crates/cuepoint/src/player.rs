@@ -37,10 +37,12 @@ fn prepare(
     let decoded = started.elapsed();
     let library_key = MusicalKey::parse(&track.key);
     let needs_analysis = track.beatgrid.is_empty() || library_key.is_none();
-    // A cached analysis is enough when it has what the library lacks.
+    // A cached waveform is enough when the library has the grid and key;
+    // otherwise the cache must hold a full analysis, even one that found
+    // no key or grid, so such tracks are not analysed again on every load.
     let cached = cache
         .and_then(|dir| analysis_cache::read(dir, &path))
-        .filter(|c| !needs_analysis || (!c.grid.is_empty() && c.key.is_some()));
+        .filter(|c| !needs_analysis || c.analysed);
     let from_cache = cached.is_some();
     let (resampled, (grid, key, waveform)) = std::thread::scope(|scope| {
         let analysis = scope.spawn(|| {
@@ -61,6 +63,7 @@ fn prepare(
             };
             if let Some(dir) = cache {
                 let entry = analysis_cache::Cached {
+                    analysed: needs_analysis,
                     grid: result.0.clone().unwrap_or_default(),
                     key: result.1,
                     waveform: result.2.clone(),

@@ -73,6 +73,8 @@ struct CuepointApp {
     /// egui time of the last input event, to keep redrawing briefly after.
     last_input: f64,
     status: Status,
+    /// Height of Performance mode's decks and mixer, as last measured.
+    deck_height: f32,
     key_prompt: Option<KeyPrompt>,
     export: Option<RunningExport>,
 }
@@ -116,6 +118,7 @@ impl CuepointApp {
             dev_seek: None,
             last_input: 0.0,
             status: Status::default(),
+            deck_height: 330.0,
             key_prompt: None,
             export: None,
         }
@@ -425,13 +428,21 @@ impl CuepointApp {
                 player.bottom()
             }
             Mode::Performance => {
-                let decks = egui::Rect::from_min_size(
+                // The decks take the height their controls need, measured
+                // as they are drawn and applied from the next frame, but
+                // leave the browser at least 200 pt.
+                let below_top = egui::Rect::from_min_max(
                     egui::pos2(full.left(), top.bottom()),
-                    egui::vec2(full.width(), 330.0),
+                    egui::pos2(full.right(), full.bottom() - cuepoint_ui::FOOTER),
+                );
+                let decks = egui::Rect::from_min_size(
+                    below_top.min,
+                    egui::vec2(full.width(), self.deck_height),
                 );
                 ui.painter()
                     .rect_filled(decks, 0.0, cuepoint_ui::theme::PANEL);
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(decks.shrink(6.0)));
+                let mut child =
+                    ui.new_child(egui::UiBuilder::new().max_rect(below_top.shrink(6.0)));
                 self.player.show_detail_waveforms(&mut child, &state);
                 child.add_space(4.0);
                 child.columns(3, |columns| {
@@ -439,6 +450,13 @@ impl CuepointApp {
                     self.player.show_mixer(&mut columns[1], &state);
                     self.player.show_deck(&mut columns[2], 1, &state);
                 });
+                let needed = (child.min_rect().height() + 12.0)
+                    .min(below_top.height() - 200.0)
+                    .max(0.0);
+                if (needed - self.deck_height).abs() > 0.5 {
+                    self.deck_height = needed;
+                    ui.ctx().request_repaint();
+                }
                 decks.bottom()
             }
         };
@@ -467,10 +485,26 @@ impl CuepointApp {
         ) {
             self.browser_action(action);
         }
-        // Space plays and pauses Player A unless text is being typed.
+        // Space plays and pauses Player A unless text is being typed or a
+        // new track is loading (the engine still holds the old one). Key
+        // repeat is ignored, so holding Space toggles once.
+        let space = ui.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::Key {
+                        key: egui::Key::Space,
+                        pressed: true,
+                        repeat: false,
+                        ..
+                    }
+                )
+            })
+        });
         if self.mode == Mode::Export
+            && space
             && ui.ctx().memory(|m| m.focused().is_none())
-            && ui.input(|i| i.key_pressed(egui::Key::Space))
+            && self.player.decks[0].loading.is_none()
         {
             self.player.play_pause(0);
         }
@@ -494,6 +528,7 @@ impl CuepointApp {
             || self.dev_seek.is_some()
             || self.artwork.is_pending()
             || self.previews.is_pending()
+            || (self.mode == Mode::Performance && self.player.mixer.is_settling())
             || now - self.last_input < 0.5;
         let wait = if busy { 16 } else { 1000 };
         ui.ctx().request_repaint_after(Duration::from_millis(wait));

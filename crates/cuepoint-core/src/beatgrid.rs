@@ -153,6 +153,47 @@ impl BeatGrid {
         Some((since_marker + i64::from(marker.beat_in_bar) - 1).rem_euclid(bar) as u32 + 1)
     }
 
+    /// Bar number of whole beat `beat`: the bar holding the grid's first
+    /// downbeat at or after beat 0 is 1, bars before it count down from 0.
+    /// Bars follow [`Self::beat_in_bar`], so a marker that restarts the bar
+    /// count starts a new bar.
+    pub fn bar_number(&self, beat: i64) -> Option<i64> {
+        let last = *self.bases.last()? as i64;
+        let first = (0..=last + i64::from(BEATS_PER_BAR)).find(|&b| self.is_downbeat(b))?;
+        Some(if beat >= first {
+            1 + self.downbeats_in(first + 1, beat)
+        } else {
+            1 - self.downbeats_in(beat + 1, first)
+        })
+    }
+
+    /// How many whole beats in `lo..=hi` are downbeats.
+    fn downbeats_in(&self, lo: i64, hi: i64) -> i64 {
+        let bar = i64::from(BEATS_PER_BAR);
+        (0..self.markers.len())
+            .map(|i| {
+                // Segment i's whole beats; the first and last segments run
+                // on without end.
+                let start = if i == 0 {
+                    i64::MIN / 4
+                } else {
+                    self.bases[i] as i64
+                };
+                let end = self
+                    .bases
+                    .get(i + 1)
+                    .map_or(i64::MAX / 4, |&b| b as i64 - 1);
+                let (lo, hi) = (lo.max(start), hi.min(end));
+                if hi < lo {
+                    return 0;
+                }
+                // Downbeats are the beats congruent to `r` modulo a bar.
+                let r = self.bases[i] as i64 - i64::from(self.markers[i].beat_in_bar) + 1;
+                (hi - r).div_euclid(bar) - (lo - 1 - r).div_euclid(bar)
+            })
+            .sum()
+    }
+
     /// Times of every whole beat in `start..end` seconds, with a downbeat
     /// flag, for drawing grid lines.
     pub fn beats_between(&self, start: f64, end: f64) -> Vec<(f64, bool)> {
@@ -355,6 +396,14 @@ mod tests {
             Some(3),
             "marker keeps its own bar position"
         );
+        // Bars follow the bar positions: beats 21 and 22 finish bar 6,
+        // and the downbeat at 23 starts bar 7.
+        let bars: Vec<(i64, u32)> = (19..=24)
+            .map(|b| (grid.bar_number(b).unwrap(), grid.beat_in_bar(b).unwrap()))
+            .collect();
+        assert_eq!(bars, [(5, 4), (6, 1), (6, 3), (6, 4), (7, 1), (7, 2)]);
+        assert_eq!(grid.bar_number(-1), Some(0));
+        assert_eq!(grid.bar_number(-5), Some(-1));
         // Positions stay monotonic through the shortened beat.
         assert!(grid.beat_at(10.05).unwrap() > 20.0 && grid.beat_at(10.05).unwrap() < 21.0);
     }

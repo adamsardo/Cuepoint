@@ -1388,8 +1388,13 @@ impl Browser {
             } else {
                 None
             };
-            let load =
-                i.key_pressed(Key::Enter) || (i.modifiers.shift && i.key_pressed(Key::ArrowLeft));
+            // Loads ignore key repeat: holding Return loads once.
+            let once = |key| {
+                i.events.iter().any(|e| {
+                    matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key)
+                })
+            };
+            let load = once(Key::Enter) || (i.modifiers.shift && once(Key::ArrowLeft));
             (step, load)
         });
         let current = self
