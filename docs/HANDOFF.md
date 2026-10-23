@@ -10,15 +10,14 @@ Cuepoint is a clean-room, pure-Rust rekordbox 7.2.19 rewrite. The plan is in `do
 | M1 Library reader (rekordbox XML, master.db via SQLCipher, egui browser) | Merged ([adamsardo/Cuepoint#3](https://github.com/adamsardo/Cuepoint/pull/3)) |
 | M2 Two-deck playback (engine, CDJ cue, loops, mixer, no-alloc audio thread) | Merged ([adamsardo/Cuepoint#4](https://github.com/adamsardo/Cuepoint/pull/4)) |
 | M3 Analysis (BPM/grid, key, colour waveform, loudness) and beat sync | Merged ([adamsardo/Cuepoint#5](https://github.com/adamsardo/Cuepoint/pull/5)) |
-| M4 USB export (export.pdb, ANLZ .DAT/.EXT, Export menu, `cuepoint export` command) | In review: [adamsardo/Cuepoint#6](https://github.com/adamsardo/Cuepoint/pull/6), branch `claude/sweet-lovelace-aobomc`. Both Codex rounds are fixed (3 findings in `75e74ba`, then 3 more); Codex is re-reviewing |
+| M4 USB export (export.pdb, ANLZ .DAT/.EXT, Export menu, `cuepoint export` command) | Merged ([adamsardo/Cuepoint#6](https://github.com/adamsardo/Cuepoint/pull/6)) after three Codex review rounds (six findings fixed, final round clean) |
 
 All 105 tests pass (1 ignored). `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean on the pinned toolchain.
 
 ## Next steps
 
-1. Check Codex's re-review of [adamsardo/Cuepoint#6](https://github.com/adamsardo/Cuepoint/pull/6). Fix any new findings, then merge.
-2. Hardware check: run `cargo run --release -p cuepoint -- export your.xml /Volumes/STICK` and load the stick on a CDJ.
-3. Milestone 5, Performance mode: 4 decks, FX families, sampler/sequencer, MIDI controllers (spec 03 and 06).
+1. Hardware check: run `cargo run --release -p cuepoint -- export your.xml /Volumes/STICK` and load the stick on a CDJ.
+2. Milestone 5, Performance mode: 4 decks, FX families, sampler/sequencer, MIDI controllers (spec 03 and 06).
 
 ## Open items
 
